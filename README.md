@@ -96,7 +96,7 @@ git clone <this repo> tandem && cd tandem
 
 make demo     # end-to-end on throwaway ports: seed, match, scout, tear down
 make dev      # api :8080, matcher :8081, web :5173
-make test     # all three suites (180 tests)
+make test     # all three suites (191 tests)
 ```
 
 `make demo` is the fastest way to see it move. It boots both services on spare
