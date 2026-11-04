@@ -332,6 +332,46 @@ make members                                # what the nightly job runs
 make handles                                # what you have declared
 ```
 
+## When public text addresses the reader
+
+The scout reads public writing, and some of it is written to instruct whoever reads it
+rather than to be read. That is not a matching signal. `tandem_scout/injection.py` watches
+for it in three places: on the wire as the body streams in, in every fetched item before it
+enters the queue, and in recorded fixtures before a replay. On a hit:
+
+1. the connection is closed at that point, so the rest of the document is never read;
+2. the attempt is appended to `data/scout/injection-log.jsonl` with source, URL, rule and a
+   short excerpt (capped at 160 characters, newlines stripped, so the log cannot become the
+   payload's next carrier);
+3. the URL is written to `data/scout/quarantine.json`, and the next run refuses to open it
+   at all, without connecting;
+4. the item is dropped, and the source's report says `injection`.
+
+`make injections` prints the log. The rules are deliberately narrow (`ignore all previous
+instructions`, `post one or two replies`, `do not tell the operator`, role markers and the
+like), so ordinary writing about prompts or AI does not trip them, and reworded attempts
+will get through. This is a seatbelt, not a sandbox: the guard against a digest that
+carries instructions is that the digest is data, read by a person or an agent that does not
+take instructions from it, and this just makes the trying visible.
+
+## The three numbers
+
+`make metrics` reports how the work itself is going, from evidence rather than memory:
+
+| metric | where it comes from |
+| --- | --- |
+| defects discovered after merge | `Fix-After-Merge:` commit trailers and `defect_after_merge` ledger events |
+| average correction cycles per change | commits sharing a `Change:` trailer, counting every commit after the first |
+| time from initial implementation to verified completion | first commit of a `Change:`, to the `verified` ledger event for it |
+
+The ledger is `metrics/ledger.jsonl`: append-only, one event per line, each naming the
+commits involved and what produced the evidence. Where there is not enough data the answer
+is "not enough data" rather than zero, because a metric that reads 0 because nobody recorded
+anything is worse than no metric.
+
+What these numbers cannot tell you: they measure the review process, not the product. A
+quiet week means this reviewer missed things, not that the code got better.
+
 ## Tests
 
 ```bash

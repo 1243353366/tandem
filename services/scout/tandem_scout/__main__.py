@@ -21,7 +21,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import members as member_mod
+from . import injection, members as member_mod
 from . import policy, queue, sources
 from .models import Observation
 
@@ -170,7 +170,16 @@ def main(argv: list[str] | None = None) -> int:
 
     reports: list[dict[str, str]] = []
     if args.replay:
-        observations = load_replay(Path(args.replay))
+        recorded = load_replay(Path(args.replay))
+        observations = []
+        for record in recorded:
+            try:
+                injection.DEFAULT.guard(record.text, source=record.source, url=record.url)
+            except injection.InjectionRefused as refused:
+                print(f"dropped a recorded item from {refused.attempt.source}: {refused.attempt.rule}; "
+                      f"logged to {injection.DEFAULT.log_path.name}", file=sys.stderr)
+                continue
+            observations.append(record)
         reports = [{"source": name, "status": "replay", "observations": str(len(observations)), "note": ""}
                    for name in source_names]
     else:

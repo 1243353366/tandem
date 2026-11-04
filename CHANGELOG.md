@@ -16,6 +16,18 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
 
 ### Added
 
+- **Injection attempts are logged and the connection is killed.** `tandem_scout/injection.py`
+  scans fetched public text on the wire, in every item, and in replayed fixtures. On a hit
+  the response is closed at the point of detection, the attempt goes to
+  `data/scout/injection-log.jsonl`, the URL is quarantined in `data/scout/quarantine.json`
+  so the next run does not open it, and the item is dropped with the source reporting
+  `injection`. `make injections` prints the log.
+
+- **The three process metrics, from evidence.** `make metrics` (scripts/metrics.py) reports
+  defects discovered after merge, average correction cycles per change, and time from
+  initial implementation to verified completion, computed from commit trailers and
+  `metrics/ledger.jsonl`. Missing evidence reads as "not enough data", never 0.
+
 - **A type check that actually runs.** `services/api` had no `tsconfig`, no typescript and
   no type step anywhere, so "the types are consistent" was an assumption. `npx tsc
   --noEmit` now runs in CI and as `make typecheck`.

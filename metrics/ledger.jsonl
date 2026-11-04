@@ -1,0 +1,3 @@
+{"at": "2026-11-04T20:31:04+00:00", "change": "review-pass-3", "commit": "47fd058", "kind": "change_started"}
+{"at": "2026-11-04T20:33:28Z", "change": "review-pass-3", "defect": "removeHandle returned undefined and skipped its audit entry after the transaction refactor", "found_by": "tsc --noEmit in CI", "found_in": "560a478", "introduced_by": "47fd058", "kind": "defect_after_merge"}
+{"at": "2026-11-04T20:33:28Z", "change": "review-pass-3", "commit": "560a478", "evidence": "CI success incl. new type step", "kind": "verified"}

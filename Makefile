@@ -21,6 +21,8 @@ help:
 	@echo "  make dev          run api + matcher + web on localhost"
 	@echo "  make demo         end-to-end demo on throwaway ports (safe to re-run)"
 	@echo "  make typecheck    type check the api (needs npm install)"
+	@echo "  make metrics      the three process numbers, from evidence
+	@echo "  make injections   attempts to instruct whoever reads the digest"
 	@echo "  make test         all suites (matcher, api, scout)"
 	@echo "  make test-fast    api + matcher only"
 	@echo "  make seed         load the demo cohort into a running api"
@@ -35,6 +37,17 @@ help:
 	@echo "  make clean        remove local runtime data"
 	@echo
 
+.PHONY: metrics
+metrics:
+	@$(PY) scripts/metrics.py
+
+.PHONY: injections
+injections:
+	@if [ -s data/scout/injection-log.jsonl ]; then \
+	  echo "attempts to instruct the reader (each one also closed a connection):"; \
+	  $(PY) -c 'import json,sys; [print("  " + (lambda e: f"{e[\"at\"][:19]}  {e[\"source\"]:<14} {e[\"rule\"]:<22} {e[\"action\"]}")(json.loads(l))) for l in open("data/scout/injection-log.jsonl") if l.strip()]'; \
+	else echo "no attempts logged"; fi
+
 .PHONY: typecheck
 typecheck:
 	@cd $(API_DIR) && npm install --no-audit --no-fund --silent && npx tsc --noEmit && echo "api types: clean"
@@ -48,9 +61,14 @@ demo:
 	@./scripts/demo.sh
 
 .PHONY: test
-test: test-matcher test-api test-scout
+test: test-matcher test-api test-scout test-tools
 	@echo
 	@echo "all suites passed"
+
+.PHONY: test-tools
+test-tools:
+	@echo "── tools ──"
+	@$(PY) -m unittest discover -s scripts/test -q
 
 .PHONY: test-fast
 test-fast: test-matcher test-api

@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .models import Observation
-from . import policy
+from . import injection, policy
 
 USER_AGENT = "tandem-scout/0.1 (+https://github.com) public-signal discovery"
 
@@ -50,16 +50,59 @@ class SourceReport:
     note: str = ""
 
 
-def default_http_get(url: str, timeout: float = 12.0) -> Any:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8", "replace"))
+CHUNK = 16 * 1024
+BODY_CAP = 512 * 1024
 
 
-def default_text_get(url: str, timeout: float = 12.0) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", "replace")
+def _addresses_reader(observation, log: injection.InjectionLog) -> bool:
+    """True when a fetched item was addressed to the reader, not about the topic.
+
+    Fetch-time detection covers the wire; this covers text that arrived inside a JSON
+    field, where the poison is in a value rather than in the body we streamed.
+    """
+    try:
+        log.guard(observation.text or "", source=observation.source, url=observation.url or "")
+    except injection.InjectionRefused:
+        return True
+    return False
+
+
+def _read_guarded(response, url: str, log: injection.InjectionLog) -> str:
+    """Read the body in chunks, and stop the moment it addresses a reader.
+
+    Scanning as we read is the difference between noticing and closing: by the time a
+    whole body has been read and stored, the connection has done its job.
+    """
+    buffer = ""
+    while True:
+        block = response.read(CHUNK)
+        if not block:
+            return buffer
+        buffer += block.decode("utf-8", "replace")
+        if injection.scan(buffer):
+            response.close()
+            log.guard(buffer, source=url.split("//")[-1].split("/")[0], url=url)
+        if len(buffer) >= BODY_CAP:
+            return buffer[:BODY_CAP]
+
+
+def _open(url: str, log: injection.InjectionLog, headers: dict[str, str], timeout: float):
+    if log.is_quarantined(url):
+        raise injection.InjectionRefused(injection.quarantined_attempt(url))
+    request = urllib.request.Request(url, headers=headers)
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
+def default_http_get(url: str, timeout: float = 12.0, log: injection.InjectionLog | None = None) -> Any:
+    log = log or injection.DEFAULT
+    with _open(url, log, {"User-Agent": USER_AGENT, "Accept": "application/json"}, timeout) as response:
+        return json.loads(_read_guarded(response, url, log))
+
+
+def default_text_get(url: str, timeout: float = 12.0, log: injection.InjectionLog | None = None) -> str:
+    log = log or injection.DEFAULT
+    with _open(url, log, {"User-Agent": USER_AGENT}, timeout) as response:
+        return _read_guarded(response, url, log)
 
 
 def _iso(value: str | int | None) -> str:
@@ -378,6 +421,7 @@ def collect(
 
         found = 0
         note = ""
+        dropped = 0
         try:
             if surface == "public_group":
                 if not channels:
@@ -399,6 +443,9 @@ def collect(
                     clean, was_scrubbed = _scrub(observation)
                     if was_scrubbed:
                         note = (note + " " if note else "") + "redacted contact details from public posts"
+                    if _addresses_reader(clean, injection.DEFAULT):
+                        dropped += 1
+                        continue
                     observations.append(clean)
                     found += 1
                 reports.append(SourceReport(
@@ -414,12 +461,25 @@ def collect(
                     clean, was_scrubbed = _scrub(observation)
                     if was_scrubbed:
                         note = (note + " " if note else "") + "redacted contact details from source text"
+                    if _addresses_reader(clean, injection.DEFAULT):
+                        dropped += 1
+                        continue
                     observations.append(clean)
                     found += 1
+        except injection.InjectionRefused as refused:
+            note = (note + " " if note else "") + (
+                f"{refused.attempt.rule}: connection closed, item not carried; "
+                f"logged to {injection.DEFAULT.log_path.name}"
+            )
+            reports.append(SourceReport(source_name, "injection", found, note))
+            continue
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError, KeyError) as exc:
             reports.append(SourceReport(source_name, "error", found, f"{type(exc).__name__}: {exc}"))
             continue
 
-        reports.append(SourceReport(source_name, "ok" if found else "empty", found, note))
+        if dropped:
+            note = (note + " " if note else "") + f"dropped {dropped} item(s) addressed to the reader"
+        status = "injection" if dropped else ("ok" if found else "empty")
+        reports.append(SourceReport(source_name, status, found, note))
 
     return observations, reports
