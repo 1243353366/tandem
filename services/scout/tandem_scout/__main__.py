@@ -62,6 +62,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tandem-scout", description="public-signal discovery for Tandem")
     parser.add_argument("--topics", default="ai,security", help="comma-separated topics to look for")
     parser.add_argument("--sources", default="hackernews,devto,github", help="comma-separated sources")
+    parser.add_argument(
+        "--channels", default="",
+        help="comma-separated public group handles (e.g. @somechannel). A group is named by "
+             "hand, never discovered. Private groups are refused.",
+    )
     parser.add_argument("--limit", type=int, default=20, help="items per topic per source")
     parser.add_argument("--out", default=str(DEFAULT_OUT), help="output directory")
     parser.add_argument("--optout", default=str(DEFAULT_OPTOUT), help="opt-out list file")
@@ -79,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
 
     topics = [t.strip() for t in args.topics.split(",") if t.strip()]
     source_names = [s.strip() for s in args.sources.split(",") if s.strip()]
+    channels = [c.strip() for c in args.channels.split(",") if c.strip()]
 
     if not args.live and not args.replay:
         print(
@@ -95,7 +101,8 @@ def main(argv: list[str] | None = None) -> int:
                    for name in source_names]
     else:
         observations, source_reports = sources.collect(
-            topics, source_names, limit_per_topic=args.limit, pause_seconds=0.4
+            topics, source_names, limit_per_topic=args.limit, pause_seconds=0.4,
+            channels=channels,
         )
         reports = [asdict(report) for report in source_reports]
 
@@ -109,7 +116,10 @@ def main(argv: list[str] | None = None) -> int:
         invite_url=args.invite_url,
     )
 
-    paths = queue.write_outputs(Path(args.out), candidates, stats, reports, topics, generated_at)
+    groups = queue.build_group_digest(observations, topics)
+    paths = queue.write_outputs(
+        Path(args.out), candidates, stats, reports, topics, generated_at, groups=groups
+    )
 
     if args.json:
         print(json.dumps([candidate.to_json() for candidate in candidates], indent=2))
@@ -117,7 +127,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"scanned {stats['seen']} public items across {len(reports)} source(s)")
         print(
             f"queue {stats['queued']} · stale {stats['stale']} · opted out {stats['opted_out']} · "
-            f"too thin {stats['too_thin']}"
+            f"too thin {stats['too_thin']} · group signals {stats['group_signal']}"
         )
         for report in reports:
             print(f"  {report['source']:<11} {report['status']:<9} {report['observations']:>3}  {report.get('note', '')}")
@@ -127,7 +137,14 @@ def main(argv: list[str] | None = None) -> int:
                   f"{', '.join(candidate.interests[:3])}")
         if not candidates:
             print("  (nothing cleared the bar this run)")
-        print(f"\nwrote {paths['digest']}\n      {paths['queue']}")
+        if groups:
+            print()
+            print("  public groups (community list, not invites):")
+            for group in groups[:6]:
+                quiet = " (quiet)" if group["quiet"] else ""
+                print(f"    {group['source']}:{group['handle']}{quiet}  "
+                      f"{group['posts_per_week']}/7d  {', '.join(group['interests'][:3])}")
+        print(f"\nwrote {paths['digest']}\n      {paths['queue']}\n      {paths['groups']}")
         print("\nread the digest and post one or two replies yourself. not more.")
 
     return 0

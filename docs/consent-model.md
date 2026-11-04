@@ -136,6 +136,26 @@ account and server membership — Tandem reads the account and *never* attempts 
 enumerate members of a server. Facebook has restricted profile access since 2018
 and the metadata says so plainly rather than promising more than it can deliver.
 
+## Where a signal may come from
+
+A consent covers the person. A **surface** decides whether their words were
+public enough to read at all:
+
+| surface | test | example |
+| --- | --- | --- |
+| `public_surface` | an open read endpoint, no login | a Hacker News comment |
+| `public_group` | the group publishes its own join link, and the content reads without joining | a Telegram channel with a web preview |
+| private | none of the above | a members-only channel, a paid group, a DM, an invite forwarded to the operator |
+
+`invite_only` is the subtle one. If a room's access came from someone handing the
+operator a key, the people in it did not choose to be readable, and the room is
+private however many members it has.
+
+Group-sourced signals are also **attributed to the group, not to a person**
+(`policy.produces_individuals`). They can inform a community list. They cannot
+create a match, a profile, or an invitation, because an audience is not a list of
+individuals who consented to anything.
+
 ## The no-reverse-lookup invariant
 
 ```ts

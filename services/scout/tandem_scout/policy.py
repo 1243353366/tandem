@@ -18,9 +18,53 @@ from typing import Iterable
 ALLOWED_INVITE_CHANNELS = ("public_thread",)
 
 #: Signal sources we read, and the only ones we read.
-#: Everything here is a public read endpoint, no authentication bypassing, no
-#: paginating behind a login, no cached copies of private data.
-ALLOWED_SOURCES = ("hackernews", "devto", "github", "reddit", "bluesky")
+ALLOWED_SOURCES = ("hackernews", "devto", "github", "bluesky", "telegram_public", "reddit")
+
+#: How visible a surface has to be before we will read it.
+#:
+#:   public_surface  an open read endpoint anyone could call from a browser
+#:   public_group    a group or channel that publishes its own join link and
+#:                   reads without joining; the group is the actor, not a person
+#:   private         members-only, invite-only, paid, or a DM. Never read.
+#:
+#: The line is not "public vs private internet". It is: **did the people posting
+#: choose a space where strangers can read it without being admitted?**
+SURFACE_VISIBILITY = {
+    "hackernews": "public_surface",
+    "devto": "public_surface",
+    "github": "public_surface",
+    "bluesky": "public_surface",
+    "telegram_public": "public_group",
+    "reddit": "public_group",
+    "discord": "public_group",
+    "facebook": "public_group",
+}
+
+ALLOWED_SURFACES = ("public_surface", "public_group")
+
+#: Surfaces that are categorically refused, whatever the operator wants.
+PRIVATE_SURFACES = (
+    "direct_message",
+    "private_channel",
+    "members_only",
+    "invite_only",      # an invite we were given, not one published to the world
+    "paid",
+    "closed_group",
+    "group_member_list",
+)
+
+#: Sources whose observations describe a *group*, not an individual. They feed
+#: the community list. They can never produce an invitation, because you cannot
+#: invite a channel and you must not treat a channel's audience as a lead list.
+GROUP_SOURCES = ("telegram_public", "reddit", "discord", "facebook")
+
+#: What a group must satisfy before we will read it. All four, no exceptions.
+GROUP_ADMISSION_RULES = (
+    "the join link is published by the group itself, in public, without an approval step",
+    "the content is readable without joining (a public preview or open page)",
+    "we read posts only, never the member list, join requests, or reactions",
+    "we never enumerate members, and never try to resolve a poster's identity",
+)
 
 #: Sources we implement but deliberately leave off by default, with the reason
 #: spelled out so a fork has to make an informed choice.
@@ -91,6 +135,52 @@ def scrub_pii(text: str) -> tuple[str, bool]:
     return cleaned, found
 
 
+def surface_of(source: str) -> str:
+    """The visibility class of a source, or a refusal."""
+    kind = SURFACE_VISIBILITY.get(source)
+    if kind is None:
+        raise PolicyViolation(f"source {source!r} has no declared visibility")
+    if kind not in ALLOWED_SURFACES:
+        raise PolicyViolation(
+            f"source {source!r} is {kind!r}; only {', '.join(ALLOWED_SURFACES)} may be read"
+        )
+    return kind
+
+
+def assert_surface(kind: str) -> None:
+    """Refuse a private surface by name, so the refusal is testable."""
+    if kind in PRIVATE_SURFACES:
+        raise PolicyViolation(
+            f"{kind!r} is a private surface. Tandem reads public groups, not private ones: "
+            "the people in a members-only space did not choose to be readable."
+        )
+    if kind not in ALLOWED_SURFACES:
+        raise PolicyViolation(f"unknown surface {kind!r}")
+
+
+def assert_group_admitted(join_url: str, readable_without_joining: bool, member_scrape: bool = False) -> None:
+    """A public group is admissible only if it published its own way in."""
+    if member_scrape:
+        raise PolicyViolation(
+            "member lists, join requests, and reactions are never read; "
+            "a group's audience is not a lead list"
+        )
+    if not readable_without_joining:
+        raise PolicyViolation(
+            "this group's content is not readable without joining, so it is not a public group"
+        )
+    if not join_url or not join_url.startswith(("https://", "http://")):
+        raise PolicyViolation(
+            "a public group must publish its own public join link; "
+            "an invitation given to us privately is not a public group"
+        )
+
+
+def produces_individuals(source: str) -> bool:
+    """Whether an observation from this source can lead to a personal invite."""
+    return source not in GROUP_SOURCES
+
+
 def assert_invite_channel(channel: str) -> None:
     if channel not in ALLOWED_INVITE_CHANNELS:
         raise PolicyViolation(
@@ -129,6 +219,17 @@ def invites_allowed(already_invited: int, cap: int = MAX_INVITES_PER_RUN) -> int
 def policy_summary() -> dict[str, object]:
     return {
         "allowed_sources": list(ALLOWED_SOURCES),
+        "surfaces": {
+            "reads": list(ALLOWED_SURFACES),
+            "reads_note": "public groups yes, private groups no",
+            "never_reads": list(PRIVATE_SURFACES),
+            "group_admission": list(GROUP_ADMISSION_RULES),
+        },
+        "group_sources": list(GROUP_SOURCES),
+        "group_sources_note": (
+            "observations from a group describe the group, not a person; they feed the "
+            "community list and can never produce an invitation"
+        ),
         "disabled_sources": DISABLED_SOURCES,
         "allowed_invite_channels": list(ALLOWED_INVITE_CHANNELS),
         "reads": "public read endpoints only; no login, no scraping behind auth",

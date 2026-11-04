@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -37,6 +38,8 @@ USER_AGENT = "tandem-scout/0.1 (+https://github.com) public-signal discovery"
 #: Callable that returns parsed JSON for a URL. Injected so tests never touch
 #: the network and so a fork can plug in its own caching proxy.
 HttpGet = Callable[[str], Any]
+#: Callable that returns raw text for a URL, for the surfaces that serve HTML.
+TextGet = Callable[[str], str]
 
 
 @dataclass
@@ -51,6 +54,12 @@ def default_http_get(url: str, timeout: float = 12.0) -> Any:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8", "replace"))
+
+
+def default_text_get(url: str, timeout: float = 12.0) -> str:
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", "replace")
 
 
 def _iso(value: str | int | None) -> str:
@@ -198,6 +207,70 @@ class BlueskySource:
         return out
 
 
+class TelegramPublicChannelSource:
+    """A public Telegram channel, read through its own public web preview.
+
+    Why this one is a `public_group` and not a scrape: a channel that enables the
+    web preview is publishing its posts at `t.me/s/<name>` for anyone with a
+    browser. Nobody is admitted, no membership is created, no member list exists
+    to read, and the only actor visible is the channel.
+
+    Consequence, and this is the point of the amendment: an observation from here
+    describes **the group**, not a person. It feeds the community list. It can
+    never produce an invitation, because you cannot invite a channel.
+
+    The operator supplies channel handles explicitly (`--channels`). We never
+    enumerate, discover, or guess channels, and we refuse anything that is not
+    readable without joining.
+    """
+
+    name = "telegram_public"
+    produces_individuals = False
+
+    _POST = re.compile(r'data-post="([^"/]+)/(\d+)"')
+    _TEXT = re.compile(r'class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', re.S)
+    _TIME = re.compile(r'<time datetime="([^"]+)"')
+
+    def fetch_channel(self, channel: str, limit: int, text_get: TextGet) -> list[Observation]:
+        handle = channel.strip().lstrip("@")
+        if not re.fullmatch(r"[A-Za-z0-9_]{3,64}", handle):
+            raise ValueError(f"not a plausible public channel handle: {channel!r}")
+
+        page = text_get(f"https://t.me/s/{handle}")
+        if "tgme_widget_message" not in page:
+            # No preview means the channel is not publicly readable. Treat that as
+            # a refusal rather than silently returning nothing useful.
+            raise ValueError(
+                f"{handle} has no public web preview, so it is not a public group "
+                "by our definition (readable without joining)"
+            )
+
+        blocks = list(self._POST.finditer(page))
+        out: list[Observation] = []
+        for index, block in enumerate(blocks):
+            end = blocks[index + 1].start() if index + 1 < len(blocks) else len(page)
+            segment = page[block.end():end]
+            text_match = self._TEXT.search(segment)
+            body = _strip_tags(text_match.group(1)) if text_match else ""
+            time_match = self._TIME.search(segment)
+            out.append(
+                Observation(
+                    source=self.name,
+                    handle=block.group(1),
+                    text=_excerpt(" ".join(body.split())),
+                    url=f"https://t.me/{block.group(1)}/{block.group(2)}",
+                    created_at=_iso(time_match.group(1) if time_match else None),
+                    topic="",
+                    extra={
+                        "thread": f"tg:{block.group(1)}/{block.group(2)}",
+                        "surface": "public_group",
+                        "join_url": f"https://t.me/{block.group(1)}",
+                    },
+                )
+            )
+        return out[:limit]
+
+
 class RedditSource:
     """Reddit. Off unless you have completed the OAuth + terms work.
 
@@ -226,6 +299,24 @@ class RedditSource:
         return ""
 
 
+def _scrub(observation: Observation) -> tuple[Observation, bool]:
+    """Redact contact details and normalize the handle, on the way in.
+
+    Returns (observation, whether anything was redacted) so the run report can
+    say plainly that a source contained contact details we refused to keep.
+    """
+    cleaned, scrubbed = policy.scrub_pii(observation.text)
+    return Observation(
+        source=observation.source,
+        handle=observation.handle.strip(),
+        text=cleaned,
+        url=observation.url,
+        created_at=observation.created_at,
+        topic=observation.topic,
+        extra=dict(observation.extra),
+    ), scrubbed
+
+
 def _strip_tags(text: str) -> str:
     out, depth = [], 0
     for char in text:
@@ -243,6 +334,7 @@ REGISTRY: dict[str, Any] = {
     "devto": DevToSource(),
     "github": GitHubSource(),
     "bluesky": BlueskySource(),
+    "telegram_public": TelegramPublicChannelSource(),
     "reddit": RedditSource(
         enabled=os.environ.get("TANDEM_SCOUT_ENABLE", "") == "reddit",
         client_id=os.environ.get("REDDIT_CLIENT_ID", ""),
@@ -257,14 +349,25 @@ def collect(
     limit_per_topic: int = 20,
     http: HttpGet | None = None,
     pause_seconds: float = 0.0,
+    channels: list[str] | None = None,
+    text_get: TextGet | None = None,
 ) -> tuple[list[Observation], list[SourceReport]]:
-    """Fetch every (topic, source) pair, with PII scrubbed on the way in."""
+    """Fetch every (topic, source) pair, with PII scrubbed on the way in.
+
+    `channels` are public group handles the operator named by hand. Group sources
+    read those instead of running a topic search, because a group is chosen, not
+    discovered.
+    """
     http = http or default_http_get
+    text_get = text_get or default_text_get
+    channels = channels or []
     observations: list[Observation] = []
     reports: list[SourceReport] = []
 
     for source_name in sources:
         policy.assert_source(source_name)
+        surface = policy.surface_of(source_name)
+        policy.assert_surface(surface)
         adapter = REGISTRY.get(source_name)
         if adapter is None:
             reports.append(SourceReport(source_name, "error", 0, "no adapter"))
@@ -276,24 +379,42 @@ def collect(
         found = 0
         note = ""
         try:
+            if surface == "public_group":
+                if not channels:
+                    reports.append(SourceReport(
+                        source_name, "needs-channels", 0,
+                        "a public group is named, not discovered; pass --channels",
+                    ))
+                    continue
+                batch: list[Observation] = []
+                for channel in channels:
+                    if pause_seconds:
+                        time.sleep(pause_seconds)
+                    batch.extend(adapter.fetch_channel(channel, limit_per_topic, text_get))
+                policy.assert_group_admitted(
+                    join_url=f"https://t.me/{batch[0].handle}" if batch else "",
+                    readable_without_joining=bool(batch),
+                )
+                for observation in batch:
+                    clean, was_scrubbed = _scrub(observation)
+                    if was_scrubbed:
+                        note = (note + " " if note else "") + "redacted contact details from public posts"
+                    observations.append(clean)
+                    found += 1
+                reports.append(SourceReport(
+                    source_name, "ok" if found else "empty", found,
+                    f"{len(channels)} public group(s), posts only",
+                ))
+                continue
+
             for topic in topics:
                 if pause_seconds:
                     time.sleep(pause_seconds)
                 for observation in adapter.fetch(topic, limit_per_topic, http):
-                    cleaned, scrubbed = policy.scrub_pii(observation.text)
-                    if scrubbed:
+                    clean, was_scrubbed = _scrub(observation)
+                    if was_scrubbed:
                         note = (note + " " if note else "") + "redacted contact details from source text"
-                    observations.append(
-                        Observation(
-                            source=observation.source,
-                            handle=observation.handle.strip(),
-                            text=cleaned,
-                            url=observation.url,
-                            created_at=observation.created_at,
-                            topic=observation.topic,
-                            extra=dict(observation.extra),
-                        )
-                    )
+                    observations.append(clean)
                     found += 1
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError, KeyError) as exc:
             reports.append(SourceReport(source_name, "error", found, f"{type(exc).__name__}: {exc}"))

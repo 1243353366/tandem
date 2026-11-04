@@ -8,6 +8,48 @@ where people post what they are building is discoverable without surveillance. A
 community where people only chat socially is not, and trying to make it so is how
 this idea turns bad.
 
+## The amendment: public groups, not private ones
+
+Earlier drafts treated "group" as a category to avoid. That was too blunt. The
+real line is not *group vs individual*, it is **choosing to be readable**:
+
+| surface | readable by a stranger without joining | in scope |
+| --- | --- | --- |
+| open read endpoint (HN, DEV, GitHub issues, Bluesky) | yes | ✅ `public_surface` |
+| public group that publishes its own join link **and** a readable page | yes | ✅ `public_group` |
+| group where you must be admitted to read anything | no | ❌ `invite_only` |
+| members-only channel, paid group, private DM | no | ❌ `private_channel` |
+| a group's member list, join requests, or reactions | — | ❌ `group_member_list` |
+
+So a public Telegram channel with a web preview is in scope: it publishes its own
+way in, and anyone with a browser can read it. A group whose only access is an
+invite someone forwarded to you is not: the people posting chose a room with a
+door, and being handed a key does not make it a public square.
+
+Three rules make this enforceable rather than aspirational
+(`services/scout/tandem_scout/policy.py`):
+
+1. Every source declares a visibility class, and `assert_surface()` refuses any
+   name in `PRIVATE_SURFACES`.
+2. `assert_group_admitted()` requires a **public join link** and content that is
+   **readable without joining**, and refuses any use of member data.
+3. Group observations are flagged as describing **the group, not a person**
+   (`policy.produces_individuals`). They can only ever feed the community list.
+   You cannot invite a channel, and a channel's audience is not a lead list.
+
+What this changes in practice:
+
+- **Telegram public channels** are now a source (new adapter, `--channels`).
+- **Discord** stays out, but for a precise reason: even a public server requires
+  joining to read history, so `assert_group_admitted` refuses it. If Discord ever
+  ships a public read surface, the adapter is one class.
+- **Facebook Groups** stay out: the Graph API has had no group-content access
+  since 2018, and public groups are login-walled.
+- **Reddit** stays out by default, for the OAuth reason given below.
+
+Nothing about private groups becomes reachable. The opt-out file, the caps, and
+the public-thread-only invite rule are unchanged.
+
 ## The map
 
 ### Professional / startup
@@ -49,8 +91,9 @@ and for finding mentors who have already opted into being contacted.
 | place | what it exposes | note |
 | --- | --- | --- |
 | Reddit | public posts, but not to non-browsers | Unauthenticated JSON returns 403. Doing it properly needs an OAuth app plus API terms. **Disabled by default** in `policy.py` with that reason in code. |
-| Discord servers | nothing, to a third party | No cross-server topic search exists. "Scanning Discord" means scraping against terms or having a bot in every server. **Not implemented, on purpose.** |
-| Facebook Groups | nothing, to a third party | Graph API has had no group-content access since 2018. **Not implemented, on purpose.** |
+| Discord servers | nothing readable without joining | A public server still needs membership to read history, so it fails `assert_group_admitted`. **Refused, not merely absent.** |
+| Facebook Groups | nothing, to a third party | Graph API has had no group-content access since 2018; public groups are login-walled. **Refused.** |
+| Telegram public channels | the public web preview at `t.me/s/<name>` | ✅ In scope as a `public_group`. Read with `--channels`, attributed to the channel, never to individuals. |
 | Specialised forums (security, AI, fitness) | varies | If a forum has a public search, it can be a source. Add an adapter; respect robots and rate limits. |
 
 ### The niche, concretely
@@ -74,13 +117,33 @@ Can:
 Cannot, in this codebase:
 - find someone's phone number or email
 - translate a handle on one platform to a handle on another
-- read a community that requires joining
+- read a community that requires joining to read at all
+- enumerate a group's members, join requests, or reactions
+- treat a public group's audience as a list of people to invite
 - send anything automatically
 
 The second one deserves emphasis: **no cross-platform identity resolution.** If
 `realtimearcher` on HN and `realtimearcher` on GitHub are the same human, Tandem
 does not know and does not merge them. Merging is the step that turns a set of
 public posts into a dossier.
+
+## Reading a public group
+
+```bash
+# one or more public channels, named by hand. A group is chosen, never discovered.
+cd services/scout
+python3 -m tandem_scout --sources telegram_public --channels examplebuilders,anotherchannel --live
+```
+
+Output goes to **`groups.json`** and the "Public groups" section of `digest.md`:
+posts per week, what the group talks about, and its own join link. There is no
+draft and no invite, because the unit is a community you might join or mention,
+not a person you might interrupt.
+
+A channel with no public preview is refused with
+`"... has no public web preview, so it is not a public group by our definition"`.
+That is the amendment working: no preview means no public, and no public means no
+reading.
 
 ## The invitation
 

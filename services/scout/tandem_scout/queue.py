@@ -53,11 +53,17 @@ def build_queue(
     """Group observations by public handle and rank the ones worth a human's time."""
     now = now or datetime.now(timezone.utc)
     optouts = optouts or set()
-    stats = {"seen": 0, "stale": 0, "opted_out": 0, "too_thin": 0, "queued": 0}
+    stats = {"seen": 0, "stale": 0, "opted_out": 0, "too_thin": 0, "group_signal": 0, "queued": 0}
 
     grouped: dict[tuple[str, str], list[Observation]] = {}
     for observation in observations:
         stats["seen"] += 1
+        # A public group is an actor, not a person. You cannot invite a channel, and
+        # a channel's audience is not a list of leads. These go to the community
+        # digest instead of the invite queue.
+        if not policy.produces_individuals(observation.source):
+            stats["group_signal"] += 1
+            continue
         if observation.age_days(now) > policy.MAX_AGE_DAYS:
             stats["stale"] += 1
             continue
@@ -133,12 +139,83 @@ def _profile_url(source: str, handle: str) -> str:
     return ""
 
 
+def build_group_digest(
+    observations: Iterable[Observation],
+    topics: list[str],
+    now: datetime | None = None,
+) -> list[dict[str, object]]:
+    """Aggregate public-group posts into a list of communities worth joining.
+
+    This is the output for group sources: which public group is alive, what it
+    talks about, and where its own public join link is. No individuals, no
+    membership, no member counting.
+    """
+    now = now or datetime.now(timezone.utc)
+    grouped: dict[tuple[str, str], list[Observation]] = {}
+    for observation in observations:
+        if policy.produces_individuals(observation.source):
+            continue
+        if observation.age_days(now) > policy.MAX_AGE_DAYS:
+            continue
+        grouped.setdefault((observation.source, observation.handle), []).append(observation)
+
+    out: list[dict[str, object]] = []
+    for (source, handle), items in grouped.items():
+        if not handle:
+            continue
+        text = " ".join(item.text for item in items)
+        interests = signals.extract_interests(text, max_tags=5)
+        ages = sorted(item.age_days(now) for item in items)
+        window_days = max(1.0, ages[-1] if ages else 1.0)
+        per_week = round(len(items) / window_days * 7, 1)
+        out.append({
+            "source": source,
+            "handle": handle,
+            "join_url": items[0].extra.get("join_url") or _profile_url(source, handle),
+            "posts": len(items),
+            "posts_per_week": per_week,
+            "interests": interests,
+            "last_seen": max(item.created_at for item in items),
+            "quiet": per_week < 1.0,
+            "why": signals.describe(source, interests, len(items), len(interests), max(i.created_at for i in items), now),
+        })
+
+    out.sort(key=lambda row: (-float(row["posts_per_week"]), str(row["handle"]).lower()))
+    return out
+
+
+def render_groups(groups: list[dict[str, object]]) -> list[str]:
+    """The community section of the digest. No invites, on purpose."""
+    lines = [
+        "## Public groups",
+        "",
+        "Groups we read because they publish their own way in. Join them yourself;",
+        "there is nothing to send from here. Private groups are never read.",
+        "",
+    ]
+    if not groups:
+        lines += ["No public groups were read this run (`--channels` names them).", ""]
+        return lines
+
+    lines += ["| group | join | posts/7d | talks about |", "| --- | --- | --- | --- |"]
+    for group in groups:
+        interests = ", ".join(group["interests"]) or "unclear"
+        quiet = " (quiet)" if group["quiet"] else ""
+        lines.append(
+            f"| {group['source']}:{group['handle']}{quiet} | {group['join_url']} | "
+            f"{group['posts_per_week']} | {interests} |"
+        )
+    lines.append("")
+    return lines
+
+
 def render_digest(
     candidates: list[Candidate],
     stats: dict[str, int],
     reports: list[dict[str, str]],
     topics: list[str],
     generated_at: str,
+    groups: list[dict[str, object]] | None = None,
 ) -> str:
     """A human-readable summary for whoever is about to send one of these."""
     lines = [
@@ -161,6 +238,7 @@ def render_digest(
             f"{report.get('observations', 0)} | {report.get('note', '') or ''} |"
         )
 
+    lines += render_groups(groups or [])
     lines += [
         "",
         "## Funnel",
@@ -205,11 +283,13 @@ def write_outputs(
     reports: list[dict[str, str]],
     topics: list[str],
     generated_at: str,
+    groups: list[dict[str, object]] | None = None,
 ) -> dict[str, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     queue_path = out_dir / "queue.json"
     digest_path = out_dir / "digest.md"
     report_path = out_dir / "report.json"
+    groups_path = out_dir / "groups.json"
 
     queue_path.write_text(
         json.dumps(
@@ -219,13 +299,15 @@ def write_outputs(
                 "policy": policy.policy_summary(),
                 "stats": stats,
                 "candidates": [candidate.to_json() for candidate in candidates],
+                "groups": groups or [],
             },
             indent=2,
         )
         + "\n"
     )
-    digest_path.write_text(render_digest(candidates, stats, reports, topics, generated_at) + "\n")
+    digest_path.write_text(render_digest(candidates, stats, reports, topics, generated_at, groups) + "\n")
+    groups_path.write_text(json.dumps({"generated_at": generated_at, "groups": groups or []}, indent=2) + "\n")
     report_path.write_text(
         json.dumps({"generated_at": generated_at, "sources": reports, "stats": stats}, indent=2) + "\n"
     )
-    return {"queue": queue_path, "digest": digest_path, "report": report_path}
+    return {"queue": queue_path, "digest": digest_path, "report": report_path, "groups": groups_path}

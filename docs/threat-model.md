@@ -116,7 +116,33 @@ identify a specific person.*
 - A fork serving a sensitive population (domestic abuse survivors, dissidents)
   should remove city and timezone entirely. Note it in your fork's README.
 
-### 7. Scout misbehaviour
+### 7. Public-group overreach
+
+*Adversary: the operator, or a well-meaning fork. Attack: treat "public group" as
+a licence to read anything a group has ever said, and to treat its audience as a
+list of leads.*
+
+The line Tandem draws is *choosing to be readable*, and it is enforced:
+
+- `SURFACE_VISIBILITY` classifies every source; `assert_surface()` refuses
+  `direct_message`, `private_channel`, `members_only`, `invite_only`, `paid`,
+  `closed_group`, and `group_member_list` by name.
+- `assert_group_admitted()` requires a **public join link** and content
+  **readable without joining**. An invite forwarded to the operator does not
+  qualify.
+- Member lists, join requests, and reactions are never read; the refusal message
+  says why ("a group's audience is not a lead list").
+- `policy.produces_individuals()` returns `False` for every group source, and
+  `build_queue()` drops those observations before scoring. A group's post can
+  never become an invitation. Pinned by
+  `test_group_posts_never_become_invite_candidates`.
+
+- **Residual risk: low-moderate.** A public channel's posts are still someone's
+  words, and a fork could attribute them to individuals by reading reactions or
+  member activity. The defence is that those fields are not fetched at all, and
+  adding them would be a visible diff against a documented rule.
+
+### 8. Scout misbehaviour
 
 *Adversary: the operator, or a well-meaning fork. Attack: turn the scout into a
 harvesting pipeline.*
@@ -130,7 +156,7 @@ harvesting pipeline.*
 - **Residual risk: moderate.** A determined operator can edit the file. The
   defence is that doing so is visible in a diff and obviously wrong.
 
-### 8. Insider access
+### 9. Insider access
 
 *Adversary: operator with shell.*
 
@@ -155,6 +181,11 @@ harvesting pipeline.*
    cap)
 6. Handles are whitelisted before reaching a URL. (regex + test)
 7. Scout invites cannot leave `public_thread`. (`assert_invite_channel` + test)
+8. Private surfaces are refused by name, and a group must publish its own join
+   link and be readable without joining. (`assert_surface`,
+   `assert_group_admitted` + tests)
+9. A group source can never produce a personal invitation.
+   (`produces_individuals`, `build_queue` + test)
 
 ## Things this product deliberately does not defend against
 

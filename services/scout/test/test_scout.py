@@ -383,5 +383,186 @@ class TestReplayEndToEnd(unittest.TestCase):
         self.assertEqual(main(["--topics", "ai"]), 2)
 
 
+# -------------------------------------------------- public vs private groups ----
+
+class TestSurfaces(unittest.TestCase):
+    """The amendment: public groups yes, private groups no, and the line is
+    'did the people posting choose a space strangers can read'."""
+
+    def test_open_endpoints_are_public_surfaces(self):
+        for source in ("hackernews", "devto", "github", "bluesky"):
+            self.assertEqual(policy.surface_of(source), "public_surface")
+
+    def test_channels_and_servers_are_public_groups(self):
+        for source in ("telegram_public", "reddit", "discord", "facebook"):
+            self.assertEqual(policy.surface_of(source), "public_group")
+
+    def test_private_surfaces_are_refused_by_name(self):
+        for kind in ("direct_message", "members_only", "invite_only", "paid", "group_member_list"):
+            with self.assertRaises(policy.PolicyViolation):
+                policy.assert_surface(kind)
+
+    def test_unknown_surface_is_refused(self):
+        with self.assertRaises(policy.PolicyViolation):
+            policy.assert_surface("sort_of_public")
+        with self.assertRaises(policy.PolicyViolation):
+            policy.surface_of("some_new_scraper")
+
+    def test_a_group_must_publish_its_own_join_link(self):
+        policy.assert_group_admitted("https://t.me/examplebuilders", True)
+        with self.assertRaises(policy.PolicyViolation):
+            policy.assert_group_admitted("", True)
+        with self.assertRaises(policy.PolicyViolation):
+            policy.assert_group_admitted("tg://private_invite/abc", True)
+
+    def test_a_group_must_be_readable_without_joining(self):
+        with self.assertRaises(policy.PolicyViolation) as caught:
+            policy.assert_group_admitted("https://t.me/closed", False)
+        self.assertIn("not readable without joining", str(caught.exception))
+
+    def test_member_lists_are_never_read(self):
+        with self.assertRaises(policy.PolicyViolation) as caught:
+            policy.assert_group_admitted("https://t.me/examplebuilders", True, member_scrape=True)
+        self.assertIn("not a lead list", str(caught.exception))
+
+    def test_a_group_is_not_a_person(self):
+        for source in policy.GROUP_SOURCES:
+            self.assertFalse(policy.produces_individuals(source), source)
+        for source in ("hackernews", "devto", "github", "bluesky"):
+            self.assertTrue(policy.produces_individuals(source), source)
+
+    def test_policy_summary_states_the_group_line(self):
+        summary = policy.policy_summary()
+        self.assertEqual(summary["surfaces"]["reads_note"], "public groups yes, private groups no")
+        self.assertIn("invite_only", summary["surfaces"]["never_reads"])
+        self.assertIn("telegram_public", summary["group_sources"])
+
+
+def _fixture_text_get(url: str) -> str:
+    if "/s/examplebuilders" in url:
+        return (FIXTURES / "telegram_public.html").read_text()
+    if "/s/closedchannel" in url:
+        return "<html><body><div>This channel is private</div></body></html>"
+    raise AssertionError(f"unexpected url: {url}")
+
+
+class TestTelegramPublicGroups(unittest.TestCase):
+    def test_parses_a_public_preview(self):
+        adapter = sources.TelegramPublicChannelSource()
+        found = adapter.fetch_channel("@examplebuilders", 10, _fixture_text_get)
+        self.assertEqual(len(found), 3)
+        self.assertEqual(found[0].handle, "examplebuilders")
+        self.assertEqual(found[0].url, "https://t.me/examplebuilders/101")
+        self.assertEqual(found[0].created_at, "2026-11-01T09:00:00+00:00")
+        self.assertIn("evals harness", found[0].text)
+        self.assertNotIn("<b>", found[0].text, "html must be stripped")
+        self.assertEqual(found[0].extra["surface"], "public_group")
+        self.assertEqual(found[0].extra["join_url"], "https://t.me/examplebuilders")
+
+    def test_respects_the_limit(self):
+        adapter = sources.TelegramPublicChannelSource()
+        self.assertEqual(len(adapter.fetch_channel("examplebuilders", 2, _fixture_text_get)), 2)
+
+    def test_a_channel_without_a_public_preview_is_refused(self):
+        adapter = sources.TelegramPublicChannelSource()
+        with self.assertRaises(ValueError) as caught:
+            adapter.fetch_channel("closedchannel", 10, _fixture_text_get)
+        self.assertIn("not a public group", str(caught.exception))
+
+    def test_channel_handles_are_validated(self):
+        adapter = sources.TelegramPublicChannelSource()
+        for handle in ("../etc/passwd", "a b", "x", ""):
+            with self.assertRaises(ValueError):
+                adapter.fetch_channel(handle, 10, _fixture_text_get)
+
+    def test_group_source_without_channels_asks_for_them(self):
+        observations, reports = sources.collect(
+            ["ai"], ["telegram_public"], http=fake_http({}), text_get=_fixture_text_get, pause_seconds=0
+        )
+        self.assertEqual(observations, [])
+        self.assertEqual(reports[0].status, "needs-channels")
+        self.assertIn("--channels", reports[0].note)
+
+    def test_group_source_reports_what_it_read(self):
+        observations, reports = sources.collect(
+            ["ai"], ["telegram_public"], http=fake_http({}), text_get=_fixture_text_get,
+            channels=["examplebuilders"], pause_seconds=0,
+        )
+        self.assertEqual(len(observations), 3)
+        self.assertEqual(reports[0].status, "ok")
+        self.assertIn("public group", reports[0].note)
+        self.assertTrue(all(o.extra["surface"] == "public_group" for o in observations))
+
+
+class TestGroupSignalsAreNotLeads(unittest.TestCase):
+    def test_group_posts_never_become_invite_candidates(self):
+        observations = [
+            Observation(source="telegram_public", handle="examplebuilders", text="ai and security",
+                        url="https://t.me/examplebuilders/1", created_at=ago(1), extra={"thread": "tg:1"}),
+            Observation(source="telegram_public", handle="examplebuilders", text="more ai",
+                        url="https://t.me/examplebuilders/2", created_at=ago(2), extra={"thread": "tg:2"}),
+        ]
+        candidates, stats = queue.build_queue(observations, ["ai"], now=NOW)
+        self.assertEqual(candidates, [], "you cannot invite a channel")
+        self.assertEqual(stats["group_signal"], 2)
+        self.assertEqual(stats["queued"], 0)
+
+    def test_group_digest_describes_communities_not_people(self):
+        observations = [
+            Observation(source="telegram_public", handle="examplebuilders", text="evals for ai agents",
+                        url="https://t.me/examplebuilders/1", created_at=ago(1),
+                        extra={"thread": "tg:1", "join_url": "https://t.me/examplebuilders"}),
+            Observation(source="telegram_public", handle="examplebuilders", text="threat modelling and security",
+                        url="https://t.me/examplebuilders/2", created_at=ago(3),
+                        extra={"thread": "tg:2", "join_url": "https://t.me/examplebuilders"}),
+        ]
+        groups = queue.build_group_digest(observations, ["ai"], now=NOW)
+        self.assertEqual(len(groups), 1)
+        entry = groups[0]
+        self.assertEqual(entry["handle"], "examplebuilders")
+        self.assertEqual(entry["join_url"], "https://t.me/examplebuilders")
+        self.assertEqual(entry["posts"], 2)
+        self.assertIn("ai", entry["interests"])
+        self.assertGreater(entry["posts_per_week"], 0)
+        self.assertNotIn("draft", entry, "a group never gets an invite draft")
+
+    def test_a_quiet_group_is_flagged_not_queued(self):
+        observations = [
+            Observation(source="telegram_public", handle="sleepy", text="ai",
+                        url="https://t.me/sleepy/1", created_at=ago(40), extra={"thread": "tg:1"}),
+            Observation(source="telegram_public", handle="sleepy", text="ai",
+                        url="https://t.me/sleepy/2", created_at=ago(44), extra={"thread": "tg:2"}),
+        ]
+        groups = queue.build_group_digest(observations, ["ai"], now=NOW)
+        self.assertTrue(groups[0]["quiet"])
+
+    def test_stale_group_posts_are_dropped(self):
+        observations = [
+            Observation(source="telegram_public", handle="gone", text="ai",
+                        url="https://t.me/gone/1", created_at=ago(200), extra={"thread": "tg:1"}),
+        ]
+        self.assertEqual(queue.build_group_digest(observations, ["ai"], now=NOW), [])
+
+    def test_digest_has_a_community_section_and_no_invites_for_groups(self):
+        groups = [{"source": "telegram_public", "handle": "examplebuilders",
+                   "join_url": "https://t.me/examplebuilders", "posts": 3, "posts_per_week": 2.1,
+                   "interests": ["ai", "security"], "last_seen": "", "quiet": False, "why": []}]
+        text = queue.render_digest([], {"queued": 0}, [], ["ai"], "now", groups)
+        self.assertIn("## Public groups", text)
+        self.assertIn("Private groups are never read", text)
+        self.assertIn("https://t.me/examplebuilders", text)
+        self.assertNotIn("```", text.split("## Public groups")[1].split("## Funnel")[0])
+
+    def test_replay_end_to_end_writes_groups_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code = main([
+                "--replay", str(FIXTURES), "--out", tmp, "--topics", "ai",
+                "--optout", str(Path(tmp) / "none.txt"),
+            ])
+            self.assertEqual(code, 0)
+            payload = json.loads((Path(tmp) / "groups.json").read_text())
+            self.assertIn("groups", payload)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

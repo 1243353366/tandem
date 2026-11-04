@@ -48,10 +48,14 @@ This matters more than the feature list, so it is first.
   pepper the moment they arrive. The raw number is never stored, never logged,
   and never exported. Public profile fields reject anything that looks like a
   phone number, email, or handle.
-- **It does not scrape private surfaces.** The scout reads public search
-  endpoints (Hacker News, DEV, GitHub issues, Bluesky). Discord and Facebook are
-  absent on purpose: neither exposes cross-server topic search to a third party,
-  and anything claiming to "scan" them is violating terms.
+- **It does not scrape private surfaces.** The rule is *choosing to be readable*,
+  not group-vs-individual: **public groups are in scope, private ones are not.**
+  The scout reads open endpoints (Hacker News, DEV, GitHub issues, Bluesky) and,
+  opt-in by name, public groups that publish their own join link and can be read
+  without joining (`--channels`). Members-only channels, paid groups, DMs,
+  invite-only rooms, member lists, and join requests are refused by name in
+  `policy.py` and pinned by tests. A group's posts feed a community list and can
+  never become an invitation to a person.
 - **It does not send DMs or cold emails.** The scout's output is a ranked queue
   with a draft reply for a *human* to post in *one* public thread. There is no
   bulk send, and the invite draft tells people how to make you stop.
@@ -71,7 +75,7 @@ git clone <this repo> tandem && cd tandem
 
 make demo     # end-to-end on throwaway ports: seed, match, scout, tear down
 make dev      # api :8080, matcher :8081, web :5173
-make test     # all three suites (110+ tests)
+make test     # all three suites (143 tests)
 ```
 
 `make demo` is the fastest way to see it move. It boots both services on spare
@@ -216,9 +220,14 @@ post. That is the whole pipeline.
 ```bash
 make scout        # replay recorded observations, no network
 make scout-live   # Hacker News, DEV, GitHub issues, Bluesky — public endpoints
+
+# public groups are named by hand; they are never discovered or enumerated
+cd services/scout && python3 -m tandem_scout --sources telegram_public \
+    --channels examplebuilders --live
 ```
 
-Output lands in `data/scout/`: `queue.json`, `digest.md`, `report.json`.
+Output lands in `data/scout/`: `queue.json` (people to reply to),
+`groups.json` (communities worth joining), `digest.md`, `report.json`.
 
 Enforced by `services/scout/tandem_scout/policy.py` and pinned by tests:
 
@@ -228,6 +237,10 @@ Enforced by `services/scout/tandem_scout/policy.py` and pinned by tests:
   one thread minimum before a stranger is worth interrupting
 - an opt-out file that wins over everything else
 - the same handle on two platforms stays two candidates; no identity merging
+- a public group must publish its own join link and be readable without joining;
+  otherwise it is refused (`assert_group_admitted`)
+- group posts never become invitations: the unit is a community, not a lead
+  (`produces_individuals`, `build_queue`)
 - Reddit is disabled by default with the reason in code: its unauthenticated JSON
   is 403 for non-browsers and doing it properly needs OAuth plus a terms
   acceptance
@@ -248,7 +261,7 @@ make test-fast   # api + matcher
 | --- | --- | --- |
 | `services/matcher/test` | 36 | scoring, vocabulary, caps, ranking, malformed input |
 | `services/api/test` | 47 | consent flow, OTP replay/rate limits, receipts, proofs, policy, erasure |
-| `services/scout/test` | 39 | adapters, PII scrubbing, queue rules, opt-out, end-to-end replay |
+| `services/scout/test` | 60 | adapters, PII scrubbing, queue rules, opt-out, public/private surfaces, end-to-end replay |
 
 No network in any of them. `scripts/demo.sh` is the integration test, and CI runs
 both.
@@ -274,7 +287,7 @@ The tests worth reading first:
 │   ├── consent-model.md     identifiers, receipts, revocation, no reverse lookup
 │   ├── threat-model.md      stalking, scraping, catfishing, doxxing, and mitigations
 │   ├── matching.md          factors, weights, caps, complementarity
-│   ├── discovery-playbook.md where to find communities, how to invite
+│   ├── discovery-playbook.md public groups vs private, where to find communities
 │   ├── launch-playbook.md   four weeks of validation gates before real users
 │   └── api.md               endpoint reference with curl examples
 ├── services/
@@ -316,6 +329,7 @@ come back for except the work.
 - [x] explainable matching with published weights
 - [x] social linking by proof post and OAuth
 - [x] public-signal scout with a hard policy boundary
+- [x] public groups in scope, private groups refused (surface classification)
 - [x] operator CLI, demo cohort, end-to-end demo
 - [ ] group matching: three to five people around one project, not just pairs
 - [ ] project pages with a commit log so "current project" is checkable
