@@ -13,6 +13,15 @@ the same time of day.
 
 ## Why this exists
 
+Making friends as an adult is weirdly hard because the environment changes. As kids and students, you're forced into repeated interactions with the same people. As adults, you often have to create those opportunities yourself.
+
+A useful way to think about it:
+
+Friendship = repeated exposure + shared activity + gradual vulnerability
+
+Most adults focus only on finding cool people, but the real trick is creating consistent contact.
+
+
 Dating apps found partners. LinkedIn found jobs. Discord found communities.
 Nothing dominant exists whose only job is *"help me find people I'd actually
 enjoy knowing"*, because the moment you say that out loud, people hear "dating
@@ -35,6 +44,13 @@ small tools and people studying detection, privacy, and applied ML. That niche
 has a real problem, talks in public, and already forms teams.
 
 ---
+
+That is the product thesis, in the author's own words. Everything below is an
+attempt to build the mechanism it describes.
+
+Tandem is a **social networking** tool with a narrow job: it creates the repeated
+exposure and shared activity that adult friendship needs, and then gets out of the
+way. It is not a feed, a follower graph, or a directory.
 
 ## What this is not
 
@@ -327,6 +343,13 @@ volume and turn a small honest product into a spam operation.
 come back for except the work.
 
 ---
+
+## The MVP
+
+The smallest honest version, and what is deliberately left out of it, is written
+down in [`docs/mvp.md`](docs/mvp.md). Short version: one niche, one cohort, intake
+to intro, with a consent receipt on every step. If a cohort does not keep coming
+back after two weeks, no amount of matching quality saves the idea.
 
 ## Roadmap
 
