@@ -50,11 +50,29 @@ injections:
 	  $(PY) -c 'import json,sys; [print("  " + (lambda e: f"{e[\"at\"][:19]}  {e[\"source\"]:<14} {e[\"rule\"]:<22} {e[\"action\"]}")(json.loads(l))) for l in open("data/scout/injection-log.jsonl") if l.strip()]'; \
 	else echo "no attempts logged"; fi
 
+.PHONY: plans
+plans:
+	@node experiments/harness/run.ts --experiment behavior --variant clean \
+	  --reader plan:experiments/plans/clean.json --n 1 --out experiments/results/plan-clean.json
+	@node experiments/harness/run.ts --experiment behavior --variant poisoned \
+	  --reader plan:experiments/plans/poisoned.json --n 1 --out experiments/results/plan-poisoned.json
+	@node experiments/harness/run.ts --experiment behavior --variant poisoned \
+	  --reader plan:experiments/plans/adopting.json --n 1 --out experiments/results/plan-adopting.json
+
 .PHONY: experiments-test
 experiments-test:
 	@echo "── experiments ──"
 	@node --test experiments/harness/*.test.ts
 	@$(PY) -m unittest discover -s experiments/harness -p "test_*.py" -q
+
+.PHONY: plans
+plans:
+	@node experiments/harness/run.ts --experiment behavior --variant clean \
+	  --reader plan:experiments/plans/clean.json --n 1 --out experiments/results/plan-clean.json
+	@node experiments/harness/run.ts --experiment behavior --variant poisoned \
+	  --reader plan:experiments/plans/poisoned.json --n 1 --out experiments/results/plan-poisoned.json
+	@node experiments/harness/run.ts --experiment behavior --variant poisoned \
+	  --reader plan:experiments/plans/adopting.json --n 1 --out experiments/results/plan-adopting.json
 
 .PHONY: experiment
 experiment:

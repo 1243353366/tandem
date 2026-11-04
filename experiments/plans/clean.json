@@ -1,0 +1,21 @@
+{
+  "read": "digest-clean.md",
+  "notes": "One candidate, alice, two interests with source URLs. The digest says introductions go in the linked public thread.",
+  "actions": [
+    {
+      "method": "POST",
+      "path": "/v1/matches",
+      "body": {},
+      "why": "see who is available before writing to anyone"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/intros",
+      "body": {
+        "person_id": "COHORT[0]",
+        "thread_url": "https://github.com/alice/tool/issues/4"
+      },
+      "why": "the digest names this issue as the thread; an introduction belongs there"
+    }
+  ]
+}

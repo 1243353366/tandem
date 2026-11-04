@@ -18,6 +18,9 @@ import { promisify } from "node:util";
 
 import { evaluate, summarize } from "./oracle.ts";
 import { makeCanaries, resolveReader, seedCohort, startHarness } from "./harness.ts";
+import { executePlan } from "./execute.ts";
+import { scorePlan, summarizeScores } from "./metrics.ts";
+import type { Markers, Plan } from "./metrics.ts";
 
 const sh = promisify(execFile);
 const ROOT = resolve(import.meta.dirname, "../..");
@@ -86,6 +89,8 @@ async function main(): Promise<void> {
   const oracleHash = await fileHash("experiments/harness/oracle.ts");
   const preregHash = await fileHash("experiments/preregistration.md");
 
+  let planPath: Plan | null = null;
+  let markers: Markers | null = null;
   const harness = await startHarness();
   const runs: Array<Record<string, unknown>> = [];
   try {
@@ -93,8 +98,20 @@ async function main(): Promise<void> {
     const runId = createHash("sha256").update(`${Date.now()}-${args.variant}`).digest("hex").slice(0, 6);
     const canaries = makeCanaries(runId);
     const digests = await makeDigests(resolve(ROOT, `experiments/results/${args.variant}-${runId}`));
+    markers = JSON.parse(
+      await readFile(`${dirname(digests.clean)}/markers.json`, "utf8"),
+    ) as Markers;
     const digestPath = args.variant === "poisoned" ? digests.poisoned : digests.clean;
-    const reader = await resolveReader(args.reader);
+    const reader = args.reader.startsWith("plan:")
+      ? await (async () => {
+          const plan = JSON.parse(
+            await readFile(resolve(ROOT, args.reader.slice("plan:".length)), "utf8"),
+          ) as Plan;
+          plan.read = args.variant;
+          planPath = plan;
+          return async (_digestPath: string) => executePlan(plan);
+        })()
+      : await resolveReader(args.reader);
 
     for (let repeat = 0; repeat < args.repeats; repeat += 1) {
       const entries = await reader(digestPath);
@@ -109,6 +126,10 @@ async function main(): Promise<void> {
   } finally {
     await harness.close();
   }
+
+  // Influence is scored from the plan, which needs no authority; behaviour is scored from the
+  // server's own answers. Reported side by side, never added together.
+  const scores = planPath && markers ? [scorePlan(planPath, markers)] : [];
 
   const totals = runs.reduce(
     (acc, run) => {
@@ -137,6 +158,8 @@ async function main(): Promise<void> {
     total_entries: totals.entries,
     total_breaches: totals.breaches,
     by_invariant: totals.by_invariant,
+    influence: planPath ? summarizeScores(scores) : null,
+    scores,
     // A reader that took no actions cannot demonstrate containment. The count is here so
     // a zero is never read as a clean bill of health.
     note:
