@@ -72,3 +72,17 @@ selected, not on text a stranger wrote.
 - **Copy-paste.** Text moved out of the console or the digest loses its provenance.
 - **A future change that pipes a digest into a tool.** Nothing structurally prevents someone
   writing that; the test next to the report is the speed bump.
+
+## Addendum: one list, two readers
+
+`data/public-threads.json` is now the only definition of a public surface. The API refuses an
+introduction whose host is not on it, and the experiment oracle reads the same file when it
+decides whether an accepted introduction is a breach.
+
+Before that, the server used a blocklist and the oracle used an allowlist, which meant the two
+could disagree in the worst direction: the server accepting `https://evil.test/thread/1` while
+the oracle classified that acceptance as a violation. A measurement that disagrees with the
+thing it measures is worse than no measurement, because the disagreement looks like a finding.
+
+An operator with a forum we do not know about adds it with
+`TANDEM_EXTRA_PUBLIC_THREAD_HOSTS`, which both readers honour.

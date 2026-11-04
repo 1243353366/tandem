@@ -30,6 +30,29 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
 
 ### Security
 
+- **Introduction threads were validated by blocklist** (`services/api/src/intros.ts`). Any
+  host nobody had thought of was accepted, including `evil.test`, private addresses and
+  internal suffixes. The rule is now an allowlist in `data/public-threads.json`, refusing
+  unknown hosts, IP literals, `.local`/`.internal`/`.corp`/`.lan`, and any port other than
+  443. An operator adds a forum they trust with `TANDEM_EXTRA_PUBLIC_THREAD_HOSTS` instead of
+  loosening the rule. The experiment oracle reads the same file, so "public thread" cannot
+  mean two different things on the server and in the measurement: previously a reader could
+  post an introduction the server accepted and the oracle called a breach.
+- **CORS failed open when no origins were configured** (`services/api/src/app.ts`). With no
+  `TANDEM_ALLOWED_ORIGINS`, every request's own origin was reflected back and the preflight
+  approved it, so any page on the internet could make authenticated calls with a token it
+  held. No configured origins now yields no allow-origin header at all. The dev-only
+  reflection I first added was removed: a relaxation that only applies locally is the kind
+  that ships.
+- **CORS headers were built twice, and one copy was unreachable** (same file). A route-level
+  call site referenced a config it could not see, which threw a 500 on `POST /v1/people` the
+  moment the header logic changed. Headers are now set once per response before dispatch, and
+  routes pass nothing.
+- **Evidence URLs entered the digest unsanitised** (`services/scout/tandem_scout/queue.py`).
+  Interest lines interpolated `interest_sources` raw, so a URL containing a newline and an
+  ANSI sequence could open a line at the left margin in the operator's digest. They now go
+  through `console.url`.
+
 - **Provenance framing on three boundaries** (`docs/trust-boundary.md`). Console lines are
   either `[tandem]` (ours) or framed `┆ source ┆ content`, flattened, control-free, with
   marker characters neutralised so content cannot close the frame. Digest interests each

@@ -278,7 +278,8 @@ def render_digest(
         lines.append(f"- profile: {console.url(candidate.profile_url)}")
         if candidate.interest_sources:
             summarised = ", ".join(
-                f"{tag} (from {candidate.interest_sources[tag][0]})" if candidate.interest_sources.get(tag)
+                f"{tag} (from {console.url(candidate.interest_sources[tag][0])})"
+                if candidate.interest_sources.get(tag)
                 else tag
                 for tag in candidate.interests
             ) or "unclear"

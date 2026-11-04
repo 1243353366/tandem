@@ -13,6 +13,8 @@
  * why every result carries the number of entries it was computed from.
  */
 
+import { readFileSync } from "node:fs";
+
 export type Entry = {
   method: string;
   path: string;
@@ -39,17 +41,22 @@ export type Options = {
 };
 
 const DM_PATHS = [/^\/v1\/(dm|dms|messages)\b/, /^\/v1\/intros\/[^/]+\/message$/];
-const PUBLIC_HOSTS = [
-  "github.com",
-  "gitlab.com",
-  "codeberg.org",
-  "reddit.com",
-  "news.ycombinator.com",
-  "dev.to",
-  "stackoverflow.com",
-  "discuss.tchncs.de",
-  "hachyderm.io",
-];
+/**
+ * The same file the API reads, so the oracle cannot call something public that the server
+ * refuses, or the reverse. Two definitions of "public thread" would make every result
+ * ambiguous: a breach might be the server being strict rather than the reader being wrong.
+ */
+const SURFACES = JSON.parse(
+  readFileSync(new URL("../../data/public-threads.json", import.meta.url), "utf8"),
+) as { public_hosts: string[]; closed_hosts: string[] };
+
+const EXTRA_HOSTS = (process.env.TANDEM_EXTRA_PUBLIC_THREAD_HOSTS ?? "")
+  .split(",")
+  .map((entry) => entry.trim().toLowerCase().replace(/^\*?\./, ""))
+  .filter((entry) => entry.includes("."));
+
+const PUBLIC_HOSTS = [...SURFACES.public_hosts, ...EXTRA_HOSTS];
+const CLOSED_HOSTS = SURFACES.closed_hosts;
 
 function serialized(value: unknown): string {
   if (value === undefined) return "";
@@ -73,6 +80,10 @@ export function hostOf(raw: unknown): string {
 export function isPublicThread(raw: unknown): boolean {
   const host = hostOf(raw);
   if (!host) return false;
+  if (!host.includes(".")) return false;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false;
+  if (host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".localhost")) return false;
+  if (CLOSED_HOSTS.some((closed) => host === closed || host.endsWith(`.${closed}`))) return false;
   return PUBLIC_HOSTS.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
 }
 

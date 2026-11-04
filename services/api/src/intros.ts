@@ -7,6 +7,8 @@
  * the place where the consent model quietly stops applying.
  */
 
+import { readFileSync } from "node:fs";
+
 import type { Db } from "./db.ts";
 import { badRequest, conflict, forbidden, notFound } from "./errors.ts";
 import { newId } from "./crypto.ts";
@@ -16,22 +18,55 @@ import { matchQuota } from "./quota.ts";
 /** How long a "no" holds before the same pair can be proposed again. */
 export const DECLINE_COOLDOWN_DAYS = 30;
 
-/** Hosts where a thread is a closed space or a private message surface. */
-const CLOSED_HOSTS = [
-  "discord.com",
-  "discord.gg",
-  "snapchat.com",
-  "t.me",
-  "telegram.me",
-  "whatsapp.com",
-  "wa.me",
-  "instagram.com",
-  "facebook.com",
-  "messenger.com",
-  "linkedin.com",
-  "signal.org",
-  "slack.com",
-];
+/**
+ * Where an introduction may point.
+ *
+ * This used to be a blocklist, which is fail-open: any host nobody had thought of passed,
+ * including private addresses and internal services. It is now an allowlist read from
+ * `data/public-threads.json`, the same file the experiment oracle reads, so "public thread"
+ * means one thing in the server and in the measurement. An operator with a forum we do not
+ * know about adds it with TANDEM_EXTRA_PUBLIC_THREAD_HOSTS rather than by loosening the rule.
+ */
+const SURFACES_PATH = new URL("../../../data/public-threads.json", import.meta.url);
+
+type Surfaces = { public_hosts: string[]; closed_hosts: string[] };
+
+function loadSurfaces(): Surfaces {
+  const raw = readFileSync(SURFACES_PATH, "utf8");
+  const parsed = JSON.parse(raw) as Partial<Surfaces>;
+  if (!Array.isArray(parsed.public_hosts) || parsed.public_hosts.length === 0) {
+    throw new Error("data/public-threads.json declares no public hosts; refusing to start");
+  }
+  return { public_hosts: parsed.public_hosts, closed_hosts: parsed.closed_hosts ?? [] };
+}
+
+const SURFACES = loadSurfaces();
+
+function extraPublicHosts(): string[] {
+  const raw = (process.env.TANDEM_EXTRA_PUBLIC_THREAD_HOSTS ?? "").trim();
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase().replace(/^\*?\./, ""))
+    .filter((entry) => entry.length > 0 && entry.includes("."));
+}
+
+function onList(host: string, list: string[]): boolean {
+  return list.some((entry) => host === entry || host.endsWith(`.${entry}`));
+}
+
+const PRIVATE_SUFFIXES = [".local", ".internal", ".localhost", ".home.arpa", ".corp", ".lan"];
+const IP_LIKE = /^\d{1,3}(\.\d{1,3}){3}$/;
+
+/** A host a stranger could read without being handed a key. */
+export function isPublicThreadHost(host: string): boolean {
+  const lower = host.toLowerCase();
+  if (!lower.includes(".")) return false; // intranet or bare label
+  if (IP_LIKE.test(lower)) return false; // no public surface is an IP literal here
+  if (PRIVATE_SUFFIXES.some((suffix) => lower.endsWith(suffix))) return false;
+  if (onList(lower, SURFACES.closed_hosts)) return false;
+  return onList(lower, SURFACES.public_hosts) || onList(lower, extraPublicHosts());
+}
 
 const DM_PATH = /(^|\/)(dm|dms|messages|messaging|inbox|chat)(\/|$)/i;
 
@@ -60,12 +95,14 @@ export function assertPublicThread(raw: unknown): Thread {
   if (parsed.username || parsed.password) {
     throw forbidden("URLs with credentials in them are not public pages.");
   }
+  if (parsed.port && parsed.port !== "443") {
+    throw forbidden("A public thread is served on https port 443, not a side channel.");
+  }
   const host = parsed.hostname.toLowerCase();
-  if (CLOSED_HOSTS.some((closed) => host === closed || host.endsWith(`.${closed}`))) {
+  if (!isPublicThreadHost(host)) {
     throw forbidden(
-      `${host} is a closed space or a message surface. An introduction goes in a public ` +
-        "thread you chose, so both people can see it without either of them handing over a " +
-        "contact detail.",
+      `${host} is not a public thread surface we recognise. An introduction goes somewhere ` +
+        "both people can read without joining anything or handing over a contact detail.",
     );
   }
   if (DM_PATH.test(parsed.pathname)) {

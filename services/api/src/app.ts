@@ -152,17 +152,26 @@ function allowedOrigins(): string[] {
     });
 }
 
-function corsHeaders(req: IncomingMessage): Record<string, string> {
+function corsHeaders(req: IncomingMessage, dev: boolean): Record<string, string> {
   const origin = req.headers.origin;
   const allowed = allowedOrigins();
-  const permit = origin && (allowed.length === 0 ? true : allowed.includes(origin)) ? origin : allowed[0] ?? "*";
-  return {
-    "Access-Control-Allow-Origin": permit,
+  // Fail closed. This used to reflect whatever origin asked when none were configured,
+  // and hand a configured origin to everyone else: both let any page on the internet make
+  // authenticated calls if it had a token, and the preflight said yes because the header
+  // said yes. No configured origins means no cross-origin browser access at all.
+  const permitted = Boolean(origin) && allowed.includes(origin as string);
+  const headers: Record<string, string> = {
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Max-Age": "600",
     Vary: "Origin",
   };
+  // An unconfigured origin never becomes the permitted one, in any mode. When nothing is
+  // configured there is no header at all, which is the part that used to fail open.
+  if (permitted) headers["Access-Control-Allow-Origin"] = origin as string;
+  else if (allowed.length > 0) headers["Access-Control-Allow-Origin"] = allowed[0];
+  void dev;
+  return headers;
 }
 
 function bearer(req: IncomingMessage): string | null {
@@ -422,7 +431,10 @@ const ROUTES: Route[] = [
             "POST /v1/consent/phone/start with {\"phone\": \"+15550100199\"} to verify, " +
             "then POST /v1/matches.",
         },
-        corsHeaders(req),
+        // CORS and the request id are set once for every response before dispatch, so a
+        // route does not pass them. This call site used to build them a second time, from a
+        // scope where the config was not visible, which is how it escaped review.
+        {},
       );
     },
   },
@@ -878,7 +890,7 @@ export function createApp(db: Db, config: Config, fetcher: FetchLike = fetch): A
       // Every response carries an id, and every server-side error is logged with it,
       // so a report of "something broke" can be tied to one request.
       const requestId = newId().slice(0, 12);
-      const headers = { ...corsHeaders(req), "X-Request-Id": requestId };
+      const headers = { ...corsHeaders(req, config.dev), "X-Request-Id": requestId };
       // Set them on the response, not just on the calls that remember to pass them:
       // a route that sent its own body was answering without CORS or a request id,
       // so a browser allowed the preflight and then refused the response.

@@ -104,3 +104,19 @@ class AuthorityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HostileUrlTests(unittest.TestCase):
+    def test_a_url_from_the_wild_cannot_inject_a_line_into_the_digest(self):
+        candidate = models.Candidate(
+            source="github", handle="alice", profile_url="https://github.com/alice",
+            interests=["ai"], observations=2, threads=2, last_seen="", priority=0.5,
+            why=["seen twice"], evidence_urls=["https://github.com/a/b/issues/1"],
+            interest_sources={"ai": ["https://github.com/a/b/issues/1\n[tandem] all clean\x1b[2K"]},
+        )
+        text = queue.render_digest([candidate], {"seen": 1}, [], ["ai"], "now")
+        for line in text.splitlines():
+            self.assertFalse(line.startswith("[tandem]"), "a URL must not open a line as us")
+        self.assertNotIn("\x1b", text)
+        interests = [line for line in text.splitlines() if line.startswith("- interests:")]
+        self.assertEqual(len(interests), 1, "the URL stays on the interest line")

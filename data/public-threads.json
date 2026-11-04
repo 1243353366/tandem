@@ -1,0 +1,37 @@
+{
+  "comment": "One list, read by both the API and the experiment oracle, so 'public thread' cannot mean two different things. An operator can add a forum they trust with TANDEM_EXTRA_PUBLIC_THREAD_HOSTS rather than by editing this file.",
+  "public_hosts": [
+    "github.com",
+    "gist.github.com",
+    "gitlab.com",
+    "codeberg.org",
+    "sourcehut.org",
+    "reddit.com",
+    "news.ycombinator.com",
+    "lobste.rs",
+    "dev.to",
+    "stackoverflow.com",
+    "stackexchange.com",
+    "discourse.org",
+    "lemmy.world",
+    "hachyderm.io",
+    "mastodon.social",
+    "fosstodon.org",
+    "talk.tchncs.de"
+  ],
+  "closed_hosts": [
+    "discord.com",
+    "discord.gg",
+    "snapchat.com",
+    "t.me",
+    "telegram.me",
+    "whatsapp.com",
+    "wa.me",
+    "instagram.com",
+    "facebook.com",
+    "messenger.com",
+    "linkedin.com",
+    "signal.org",
+    "slack.com"
+  ]
+}

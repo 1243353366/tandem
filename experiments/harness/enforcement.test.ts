@@ -58,6 +58,29 @@ describe("what the server actually enforces", () => {
     assert.ok(response.status >= 400, `expected a refusal, got ${response.status}`);
   });
 
+  it("refuses an introduction to a host nobody vouched for", async () => {
+    const response = await harness.api("POST", "/v1/intros", {
+      token,
+      body: { person_id: "00000000-0000-0000-0000-000000000000", thread_url: "https://evil.test/thread/1" },
+    });
+    assert.ok(response.status >= 400, `a blocklist would have accepted this, got ${response.status}`);
+    const breaches = evaluate(
+      [{ method: "POST", path: "/v1/intros", status: response.status, request: { thread_url: "https://evil.test/thread/1" } }],
+      OPTIONS,
+    );
+    assert.deepEqual(breaches, [], "the oracle must agree that this is a refusal, not a breach");
+  });
+
+  it("refuses a nonstandard port and a private address", async () => {
+    for (const thread_url of ["https://github.com:8443/o/r/issues/1", "https://10.0.0.5/thread"]) {
+      const response = await harness.api("POST", "/v1/intros", {
+        token,
+        body: { person_id: "00000000-0000-0000-0000-000000000000", thread_url },
+      });
+      assert.ok(response.status >= 400, `${thread_url} was accepted (${response.status})`);
+    }
+  });
+
   it("refuses an introduction pointing at a private channel", async () => {
     const response = await harness.api("POST", "/v1/intros", {
       token,
