@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Tandem — find people to build with. Opt-in, consent-first project partner matching.">
+<title>Tandem — find people to build with</title>
+<style>
+  :root {
+    --ink: #14110f;
+    --paper: #faf7f2;
+    --muted: #6b625a;
+    --line: #e2dbd1;
+    --accent: #1f6f4a;
+    --accent-ink: #f2f7f3;
+    --warn: #8a4b12;
+    --radius: 10px;
+    --font: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #efeae2;
+      --paper: #14110f;
+      --muted: #9b9188;
+      --line: #2c2723;
+      --accent: #5fbf8d;
+      --accent-ink: #10231a;
+      --warn: #e0a45f;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 48px 24px 96px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 28px; margin-bottom: 40px; }
+  .mark { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: clamp(2rem, 5vw, 2.9rem); line-height: 1.05; margin: 0; letter-spacing: -0.02em; }
+  .tagline { color: var(--muted); margin: 10px 0 0; max-width: 56ch; }
+  .pill {
+    font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+    border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; color: var(--muted);
+  }
+  .grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 40px; align-items: start; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  section { margin-bottom: 40px; }
+  h2 { font-size: 0.78rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 0 0 16px; font-weight: 600; }
+  fieldset { border: 0; padding: 0; margin: 0 0 22px; }
+  label { display: block; font-size: 0.86rem; font-weight: 600; margin-bottom: 6px; }
+  .hint { font-size: 0.8rem; color: var(--muted); font-weight: 400; margin: 0 0 8px; }
+  input[type=text], input[type=tel], input[type=number], select, textarea {
+    width: 100%; padding: 11px 12px; font: inherit; font-size: 0.95rem;
+    background: transparent; color: var(--ink);
+    border: 1px solid var(--line); border-radius: var(--radius);
+  }
+  input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .row-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+  @media (max-width: 560px) { .row, .row-3 { grid-template-columns: 1fr; } }
+  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }
+  @media (max-width: 560px) { .checks { grid-template-columns: 1fr; } }
+  .check { display: flex; align-items: center; gap: 9px; font-weight: 400; font-size: 0.92rem; margin: 0; }
+  .check input { width: 16px; height: 16px; accent-color: var(--accent); }
+  button {
+    font: inherit; font-weight: 600; cursor: pointer;
+    padding: 12px 20px; border-radius: var(--radius);
+    border: 1px solid var(--line); background: transparent; color: var(--ink);
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  button.primary:disabled { opacity: 0.5; cursor: progress; }
+  .actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .card {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 20px; margin-bottom: 16px; background: color-mix(in srgb, var(--ink) 2%, transparent);
+  }
+  .card h3 { margin: 0 0 4px; font-size: 1.02rem; }
+  .meta { font-size: 0.8rem; color: var(--muted); }
+  .score { font-variant-numeric: tabular-nums; font-weight: 700; float: right; }
+  ul.reasons { margin: 12px 0 0; padding: 0; list-style: none; font-size: 0.86rem; }
+  ul.reasons li { padding: 3px 0; color: var(--muted); }
+  ul.reasons li::before { content: "+ "; color: var(--accent); }
+  ul.reasons li.block::before { content: "– "; color: var(--warn); }
+  .status { font-size: 0.86rem; color: var(--muted); min-height: 1.4em; }
+  .status.error { color: var(--warn); }
+  .empty { color: var(--muted); font-size: 0.9rem; }
+  details { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
+  summary { cursor: pointer; font-size: 0.86rem; font-weight: 600; }
+  details p { font-size: 0.86rem; color: var(--muted); }
+  code { font-size: 0.82rem; background: color-mix(in srgb, var(--ink) 6%, transparent); padding: 1px 5px; border-radius: 4px; }
+  .never { font-size: 0.84rem; color: var(--muted); padding-left: 18px; }
+  .never li { margin-bottom: 4px; }
+  footer { border-top: 1px solid var(--line); margin-top: 48px; padding-top: 20px; font-size: 0.82rem; color: var(--muted); }
+  a { color: var(--accent); text-underline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="mark">
+      <h1>Tandem</h1>
+      <span class="pill">find people to build with</span>
+    </div>
+    <p class="tagline">
+      Not a dating app, not a network. Pick one thing you are actually working on,
+      say how many hours you have, and see the handful of people who want the same
+      work. Friendship happens later, or it doesn't.
+    </p>
+  </header>
+
+  <div class="grid">
+    <main>
+      <section>
+        <h2>1 · What you are working on</h2>
+        <form id="profile-form" novalidate>
+          <fieldset>
+            <label for="display_name">Name or handle</label>
+            <input type="text" id="display_name" name="display_name" autocomplete="nickname" required maxlength="60" placeholder="how people will see you">
+          </fieldset>
+
+          <fieldset>
+            <label for="headline">One line about you</label>
+            <p class="hint">No email, no phone, no @handles. Those go through the consent step below.</p>
+            <input type="text" id="headline" name="headline" maxlength="120" placeholder="infra and rust, allergic to dashboards">
+          </fieldset>
+
+          <fieldset>
+            <div class="row">
+              <div>
+                <label for="location_city">City</label>
+                <input type="text" id="location_city" name="location_city" maxlength="80" placeholder="Brooklyn">
+              </div>
+              <div>
+                <label for="timezone">Timezone</label>
+                <select id="timezone" name="timezone"></select>
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <label for="current_project">Current project</label>
+            <input type="text" id="current_project" name="current_project" maxlength="200" placeholder="a local-first evidence tool">
+          </fieldset>
+
+          <fieldset>
+            <div class="row">
+              <div>
+                <label for="interests">Interests</label>
+                <p class="hint">Comma separated. <em>ai, security, python</em></p>
+                <input type="text" id="interests" name="interests" maxlength="240" placeholder="ai, security, python">
+              </div>
+              <div>
+                <label for="project_tags">Project tech / tags</label>
+                <p class="hint">What the project is made of.</p>
+                <input type="text" id="project_tags" name="project_tags" maxlength="160" placeholder="python, rust">
+              </div>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <label for="hours_per_week">Hours available per week</label>
+            <input type="number" id="hours_per_week" name="hours_per_week" min="0" max="80" step="1" value="5">
+          </fieldset>
+
+          <fieldset>
+            <label>Looking for</label>
+            <p class="hint">Pick what you actually want. A profile with no goal cannot match, so we will not pretend otherwise.</p>
+            <div class="checks" id="looking_for"></div>
+          </fieldset>
+
+          <fieldset>
+            <label>What you can offer</label>
+            <p class="hint">Optional. This is how a one-sided ask becomes reciprocal.</p>
+            <div class="checks" id="offers"></div>
+          </fieldset>
+
+          <fieldset>
+            <label>How you like to work</label>
+            <div class="row-3">
+              <div>
+                <label for="pace" style="font-weight:400;font-size:0.8rem;color:var(--muted)">Pace</label>
+                <select id="pace" name="pace">
+                  <option value="async">async</option>
+                  <option value="mixed" selected>mixed</option>
+                  <option value="sync">sync</option>
+                </select>
+              </div>
+              <div>
+                <label for="group_size" style="font-weight:400;font-size:0.8rem;color:var(--muted)">Group</label>
+                <select id="group_size" name="group_size">
+                  <option value="one_on_one">one on one</option>
+                  <option value="small" selected>small</option>
+                  <option value="large">large</option>
+                </select>
+              </div>
+              <div>
+                <label for="directness" style="font-weight:400;font-size:0.8rem;color:var(--muted)">Directness</label>
+                <select id="directness" name="directness">
+                  <option value="1">1 gentle</option>
+                  <option value="2">2</option>
+                  <option value="3" selected>3</option>
+                  <option value="4">4</option>
+                  <option value="5">5 blunt</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
+          <div class="actions">
+            <button type="submit" class="primary" id="submit">Create profile</button>
+            <span class="status" id="form-status"></span>
+          </div>
+        </form>
+      </section>
+
+      <section id="consent-section" hidden>
+        <h2>2 · Prove you are a person</h2>
+        <p class="hint" style="margin-bottom:16px">
+          Matching needs one verified identifier. Your number is hashed the moment it arrives;
+          we never store the number itself and we never look anyone up by theirs.
+        </p>
+        <div class="card">
+          <label for="phone">Your phone number</label>
+          <input type="tel" id="phone" placeholder="+1 555 010 0199" autocomplete="tel">
+          <div class="actions">
+            <button id="send-code">Send code</button>
+            <span class="status" id="phone-status"></span>
+          </div>
+          <div id="code-row" hidden style="margin-top:14px">
+            <label for="code">Six digit code</label>
+            <input type="text" id="code" inputmode="numeric" maxlength="6" placeholder="000000">
+            <div class="actions">
+              <button class="primary" id="verify-code">Verify</button>
+              <span class="status" id="code-status"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Optional: link a public account</h3>
+          <p class="meta">Proof post only. We generate a code, you paste it on your own profile, we read it back. No password, no scraping.</p>
+          <div class="row" style="margin-top:12px">
+            <select id="network">
+              <option value="github">GitHub</option>
+              <option value="bluesky">Bluesky</option>
+              <option value="mastodon">Mastodon</option>
+            </select>
+            <input type="text" id="handle" placeholder="your handle">
+          </div>
+          <div class="actions">
+            <button id="start-proof">Get my code</button>
+            <span class="status" id="proof-status"></span>
+          </div>
+          <div id="proof-steps" hidden style="margin-top:14px">
+            <ol class="hint" id="proof-list" style="padding-left:18px"></ol>
+            <div class="actions">
+              <button class="primary" id="verify-proof">Verify</button>
+              <span class="status" id="proof-verify-status"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <aside>
+      <section>
+        <h2>Matches</h2>
+        <div class="actions" style="margin-top:0">
+          <button id="find" class="primary" disabled>Find people</button>
+          <span class="status" id="match-status">Create a profile and verify to unlock.</span>
+        </div>
+        <div id="results" style="margin-top:20px">
+          <p class="empty">Nothing yet. Match scores come with their reasons, so you can argue with them.</p>
+        </div>
+      </section>
+
+      <section>
+        <h2>What this never does</h2>
+        <ul class="never">
+          <li>No lookup of a person by phone number, email, or handle.</li>
+          <li>No contact details in public fields; the API rejects them.</li>
+          <li>No DMs, no cold emails, no invite blasts.</li>
+          <li>No unverified profiles in your results.</li>
+        </ul>
+        <details>
+          <summary>How matching actually works</summary>
+          <p>
+            Six factors, published weights: goal 30%, interests 25%, availability 15%,
+            communication 12%, timezone 10%, momentum 8%. No shared goal caps a pair at
+            0.22 however well the rest lines up. Every score breaks down per factor and
+            the engine is <code>services/matcher</code>.
+          </p>
+        </details>
+        <details>
+          <summary>Your data</summary>
+          <p>
+            <code>GET /v1/export</code> returns everything held about you.
+            <code>DELETE /v1/people/:id</code> erases the profile and its consents.
+            Revoking a consent deletes the signals derived from it in the same transaction.
+          </p>
+        </details>
+      </section>
+    </aside>
+  </div>
+
+  <footer>
+    Tandem is a reference implementation, not a hosted service. Run it yourself:
+    <code>make dev</code>. Read <code>docs/consent-model.md</code> before pointing it at real people.
+  </footer>
+</div>
+
+<script type="module">
+const API = (location.port === "8080" || !location.hostname) ? "" : "http://127.0.0.1:8080";
+const ROLES = [
+  ["cofounder", "Co-founder"],
+  ["collaborator", "Project partner"],
+  ["study_partner", "Study partner"],
+  ["accountability", "Accountability"],
+  ["mentor", "A mentor"],
+  ["mentee", "Someone to mentor"],
+  ["hobby_group", "Hobby group"],
+  ["friend", "Friend"],
+];
+
+const $ = (id) => document.getElementById(id);
+const state = { token: localStorage.getItem("tandem.token") || "", person: null, verified: false };
+
+function el(tag, props = {}, children = []) {
+  const node = Object.assign(document.createElement(tag), props);
+  children.forEach((child) => node.append(child));
+  return node;
+}
+
+function status(id, text, isError = false) {
+  const node = $(id);
+  node.textContent = text;
+  node.classList.toggle("error", Boolean(isError));
+}
+
+// timezones
+const tzSelect = $("timezone");
+const guess = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+const zones = Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : [guess, "UTC"];
+[...new Set([guess, ...zones])].forEach((zone) => {
+  tzSelect.append(el("option", { value: zone, textContent: zone, selected: zone === guess }));
+});
+
+// role checkboxes
+for (const [value, label] of ROLES) {
+  $("looking_for").append(
+    el("label", { className: "check" }, [el("input", { type: "checkbox", value, name: "looking_for" }), label]),
+  );
+  $("offers").append(
+    el("label", { className: "check" }, [el("input", { type: "checkbox", value, name: "offers" }), label]),
+  );
+}
+
+const checked = (name) =>
+  [...document.querySelectorAll(`input[name="${name}"]:checked`)].map((input) => input.value);
+const split = (value) => value.split(/[,;]/).map((part) => part.trim()).filter(Boolean);
+
+async function api(method, path, body, token = state.token) {
+  const response = await fetch(`${API}${path}`, {
+    method,
+    headers: {
+      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = Array.isArray(payload.detail)
+      ? payload.detail.map((item) => `${item.field}: ${item.message}`).join("; ")
+      : payload.message || payload.error || `HTTP ${response.status}`;
+    throw new Error(detail);
+  }
+  return payload;
+}
+
+$("profile-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  $("submit").disabled = true;
+  status("form-status", "Creating…");
+  try {
+    const body = {
+      display_name: $("display_name").value,
+      headline: $("headline").value,
+      location_city: $("location_city").value,
+      timezone: $("timezone").value,
+      current_project: $("current_project").value,
+      interests: split($("interests").value),
+      project_tags: split($("project_tags").value),
+      hours_per_week: Number($("hours_per_week").value) || 0,
+      looking_for: checked("looking_for"),
+      offers: checked("offers"),
+      comm_style: {
+        pace: $("pace").value,
+        directness: Number($("directness").value),
+        group_size: $("group_size").value,
+        prefers: ["text"],
+      },
+    };
+    const payload = await api("POST", "/v1/people", body, "");
+    state.token = payload.token;
+    state.person = payload.person;
+    localStorage.setItem("tandem.token", payload.token);
+    status("form-status", "Profile created. Now prove you are a person.");
+    $("consent-section").hidden = false;
+    $("consent-section").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (error) {
+    status("form-status", error.message, true);
+  } finally {
+    $("submit").disabled = false;
+  }
+});
+
+let challengeId = "";
+$("send-code").addEventListener("click", async () => {
+  status("phone-status", "Sending…");
+  try {
+    const payload = await api("POST", "/v1/consent/phone/start", { phone: $("phone").value });
+    challengeId = payload.challenge_id;
+    $("code-row").hidden = false;
+    status("phone-status", payload.hint ? `Code sent to ${payload.hint}` : "Code sent.");
+    if (payload.dev_code) {
+      $("code").value = payload.dev_code;
+      status("phone-status", `Dev mode: code ${payload.dev_code}`);
+    }
+  } catch (error) {
+    status("phone-status", error.message, true);
+  }
+});
+
+$("verify-code").addEventListener("click", async () => {
+  status("code-status", "Checking…");
+  try {
+    await api("POST", "/v1/consent/phone/verify", { challenge_id: challengeId, code: $("code").value });
+    state.verified = true;
+    status("code-status", "Verified.");
+    $("find").disabled = false;
+    status("match-status", "Ready when you are.");
+  } catch (error) {
+    status("code-status", error.message, true);
+  }
+});
+
+let proofId = "";
+$("start-proof").addEventListener("click", async () => {
+  status("proof-status", "Preparing…");
+  try {
+    const payload = await api("POST", `/v1/social/${$("network").value}/start`, { handle: $("handle").value });
+    proofId = payload.proof_id;
+    $("proof-list").replaceChildren(...(payload.steps || []).map((step) => el("li", { textContent: step })));
+    $("proof-steps").hidden = false;
+    status("proof-status", "Follow the steps, then verify.");
+  } catch (error) {
+    status("proof-status", error.message, true);
+  }
+});
+
+$("verify-proof").addEventListener("click", async () => {
+  status("proof-verify-status", "Reading your profile…");
+  try {
+    const payload = await api("POST", `/v1/social/${$("network").value}/verify`, { proof_id: proofId });
+    if (payload.status === "verified") {
+      status("proof-verify-status", payload.detail || "Verified.");
+      $("find").disabled = !state.verified && false;
+    } else {
+      status("proof-verify-status", payload.reason || "Not found yet.", true);
+    }
+  } catch (error) {
+    status("proof-verify-status", error.message, true);
+  }
+});
+
+function renderResults(payload) {
+  const results = $("results");
+  results.replaceChildren();
+  if (!payload.matches.length) {
+    results.append(
+      el("p", {
+        className: "empty",
+        textContent:
+          `No one cleared the bar out of ${payload.candidates_considered} verified people. ` +
+          "That is a real answer: adding a goal or widening interests helps more than refreshing.",
+      }),
+    );
+    return;
+  }
+  for (const match of payload.matches) {
+    const person = match.person || {};
+    const card = el("div", { className: "card" }, [
+      el("span", { className: "score", textContent: match.score.toFixed(3) }),
+      el("h3", { textContent: person.display_name || "someone" }),
+      el("p", { className: "meta", textContent: person.headline || "" }),
+      el("p", {
+        className: "meta",
+        textContent: [person.location?.city, person.timezone, `${person.hours_per_week}h/week`]
+          .filter(Boolean)
+          .join(" · "),
+      }),
+    ]);
+    const reasons = el("ul", { className: "reasons" });
+    match.reasons.slice(0, 4).forEach((reason) => reasons.append(el("li", { textContent: reason })));
+    match.blockers.slice(0, 2).forEach((blocker) => reasons.append(el("li", { className: "block", textContent: blocker })));
+    card.append(reasons);
+    results.append(card);
+  }
+}
+
+$("find").addEventListener("click", async () => {
+  $("find").disabled = true;
+  status("match-status", "Looking…");
+  try {
+    const payload = await api("POST", "/v1/matches", { limit: 8 });
+    status("match-status", `${payload.matches.length} of ${payload.candidates_considered} considered · engine ${payload.engine_version}`);
+    renderResults(payload);
+  } catch (error) {
+    status("match-status", error.message, true);
+  } finally {
+    $("find").disabled = false;
+  }
+});
+
+// restore a session if there is one
+if (state.token) {
+  api("GET", "/v1/me")
+    .then((payload) => {
+      state.person = payload.person;
+      state.verified = payload.verified;
+      $("consent-section").hidden = false;
+      $("find").disabled = !payload.verified;
+      status("form-status", `Signed in as ${payload.person.display_name}.`);
+      status("match-status", payload.verified ? "Ready when you are." : "Verify a phone number to unlock matching.");
+    })
+    .catch(() => localStorage.removeItem("tandem.token"));
+}
+</script>
+</body>
+</html>

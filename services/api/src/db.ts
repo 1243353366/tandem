@@ -1,0 +1,162 @@
+/**
+ * Storage.
+ *
+ * SQLite via Node's built-in `node:sqlite` so the whole stack runs with zero
+ * installed dependencies. The schema mirrors `db/001_init.sql` (Postgres).
+ * Pointing this at Postgres later means swapping this module, not the routes.
+ */
+
+import { DatabaseSync } from "node:sqlite";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+
+export type Db = DatabaseSync;
+
+export function nowIso(): string {
+  return new Date().toISOString();
+}
+
+export function isoIn(seconds: number): string {
+  return new Date(Date.now() + seconds * 1000).toISOString();
+}
+
+const SCHEMA = [
+  `PRAGMA foreign_keys = ON`,
+  `PRAGMA journal_mode = WAL`,
+  `CREATE TABLE IF NOT EXISTS people (
+     id TEXT PRIMARY KEY,
+     display_name TEXT NOT NULL,
+     headline TEXT NOT NULL DEFAULT '',
+     location_city TEXT NOT NULL DEFAULT '',
+     location_region TEXT NOT NULL DEFAULT '',
+     location_country TEXT NOT NULL DEFAULT '',
+     timezone TEXT NOT NULL DEFAULT '',
+     interests TEXT NOT NULL DEFAULT '[]',
+     current_project TEXT NOT NULL DEFAULT '',
+     project_tags TEXT NOT NULL DEFAULT '[]',
+     hours_per_week INTEGER NOT NULL DEFAULT 0,
+     looking_for TEXT NOT NULL DEFAULT '[]',
+     offers TEXT NOT NULL DEFAULT '[]',
+     comm_style TEXT NOT NULL DEFAULT '{}',
+     visibility TEXT NOT NULL DEFAULT 'searchable',
+     status TEXT NOT NULL DEFAULT 'active',
+     api_token_hash TEXT NOT NULL,
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS people_searchable ON people (visibility, status)`,
+  `CREATE TABLE IF NOT EXISTS consents (
+     id TEXT PRIMARY KEY,
+     person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+     kind TEXT NOT NULL,
+     subject_hash TEXT NOT NULL,
+     subject_hint TEXT NOT NULL DEFAULT '',
+     scope TEXT NOT NULL,
+     policy_version TEXT NOT NULL,
+     granted_at TEXT NOT NULL,
+     expires_at TEXT,
+     revoked_at TEXT,
+     receipt_hash TEXT NOT NULL,
+     evidence TEXT NOT NULL DEFAULT '{}'
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS consents_one_live_per_subject
+     ON consents (kind, subject_hash) WHERE revoked_at IS NULL`,
+  `CREATE INDEX IF NOT EXISTS consents_by_person ON consents (person_id, kind)`,
+  `CREATE TABLE IF NOT EXISTS phone_challenges (
+     id TEXT PRIMARY KEY,
+     phone_hash TEXT NOT NULL,
+     phone_hint TEXT NOT NULL DEFAULT '',
+     code_hash TEXT NOT NULL,
+     salt TEXT NOT NULL,
+     attempts INTEGER NOT NULL DEFAULT 0,
+     created_at TEXT NOT NULL,
+     expires_at TEXT NOT NULL,
+     consumed_at TEXT,
+     person_id TEXT REFERENCES people(id) ON DELETE CASCADE
+   )`,
+  `CREATE INDEX IF NOT EXISTS phone_challenges_live ON phone_challenges (phone_hash, expires_at)`,
+  `CREATE TABLE IF NOT EXISTS social_proofs (
+     id TEXT PRIMARY KEY,
+     person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+     network TEXT NOT NULL,
+     handle TEXT NOT NULL,
+     nonce TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'pending',
+     evidence_url TEXT,
+     created_at TEXT NOT NULL,
+     verified_at TEXT,
+     expires_at TEXT NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS social_proofs_pending ON social_proofs (person_id, status)`,
+  `CREATE TABLE IF NOT EXISTS signals (
+     id TEXT PRIMARY KEY,
+     person_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+     consent_id TEXT REFERENCES consents(id) ON DELETE CASCADE,
+     source TEXT NOT NULL,
+     kind TEXT NOT NULL,
+     value TEXT NOT NULL,
+     confidence REAL NOT NULL DEFAULT 1.0,
+     observed_at TEXT NOT NULL,
+     expires_at TEXT
+   )`,
+  `CREATE INDEX IF NOT EXISTS signals_by_person ON signals (person_id, kind)`,
+  `CREATE TABLE IF NOT EXISTS matches (
+     id TEXT PRIMARY KEY,
+     a_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+     b_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+     score REAL NOT NULL,
+     score_breakdown TEXT NOT NULL,
+     reasons TEXT NOT NULL,
+     blockers TEXT NOT NULL DEFAULT '[]',
+     engine_version TEXT NOT NULL,
+     created_at TEXT NOT NULL
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS matches_pair ON matches (a_id, b_id)`,
+  `CREATE TABLE IF NOT EXISTS audit_log (
+     id TEXT PRIMARY KEY,
+     actor TEXT NOT NULL,
+     action TEXT NOT NULL,
+     subject_hash TEXT,
+     at TEXT NOT NULL,
+     detail TEXT NOT NULL DEFAULT '{}'
+   )`,
+  `CREATE INDEX IF NOT EXISTS audit_by_time ON audit_log (at DESC)`,
+];
+
+export function openDb(path: string): Db {
+  if (path !== ":memory:") {
+    mkdirSync(dirname(path), { recursive: true });
+  }
+  const db = new DatabaseSync(path);
+  for (const statement of SCHEMA) db.exec(statement);
+  return db;
+}
+
+export function audit(
+  db: Db,
+  actor: string,
+  action: string,
+  subjectHash: string | null,
+  detail: Record<string, unknown> = {},
+): void {
+  db.prepare(
+    `INSERT INTO audit_log (id, actor, action, subject_hash, at, detail)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    crypto.randomUUID(),
+    actor,
+    action,
+    subjectHash,
+    nowIso(),
+    JSON.stringify(detail),
+  );
+}
+
+export function parseJson<T>(raw: unknown, fallback: T): T {
+  if (typeof raw !== "string" || raw === "") return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}

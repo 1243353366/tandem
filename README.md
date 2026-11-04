@@ -1,0 +1,333 @@
+# Tandem
+
+**Find people to build with.**
+
+Not a dating app. Not a network. A place to find the two or three people who
+want to work on the same thing you want to work on, at the same intensity, at
+the same time of day.
+
+> A startup can form this way. Friendships form this way too. Both are the same
+> mechanism: repeated interaction, shared goals, mutual trust, competence.
+
+---
+
+## Why this exists
+
+Dating apps found partners. LinkedIn found jobs. Discord found communities.
+Nothing dominant exists whose only job is *"help me find people I'd actually
+enjoy knowing"*, because the moment you say that out loud, people hear "dating
+app" and stop listening.
+
+So Tandem does not say that. It says: **find a project partner.**
+
+- Build an AI project
+- Start a podcast
+- Study for a certification
+- Train for a marathon
+- Learn a language
+
+People already know why they need that. Friendship, if it happens, is a
+byproduct of doing the work together, and Tandem does not pretend to optimise
+for it.
+
+The narrow first niche is **AI builders and security learners**: people shipping
+small tools and people studying detection, privacy, and applied ML. That niche
+has a real problem, talks in public, and already forms teams.
+
+---
+
+## What this is not
+
+This matters more than the feature list, so it is first.
+
+- **It is not a people-search engine.** There is no endpoint that maps a phone
+  number, email address, or social handle to a person. Not "not yet". Not
+  "enterprise only". Refused in code (`services/api/src/policy.ts`), tested in CI
+  (`test/api.test.ts`), and documented (`docs/consent-model.md`).
+- **It does not harvest contact details.** Phone numbers are hashed with a server
+  pepper the moment they arrive. The raw number is never stored, never logged,
+  and never exported. Public profile fields reject anything that looks like a
+  phone number, email, or handle.
+- **It does not scrape private surfaces.** The scout reads public search
+  endpoints (Hacker News, DEV, GitHub issues, Bluesky). Discord and Facebook are
+  absent on purpose: neither exposes cross-server topic search to a third party,
+  and anything claiming to "scan" them is violating terms.
+- **It does not send DMs or cold emails.** The scout's output is a ranked queue
+  with a draft reply for a *human* to post in *one* public thread. There is no
+  bulk send, and the invite draft tells people how to make you stop.
+
+If any of that makes the product less exciting, it also makes it something you
+can run without being a creep, and that trade was not close.
+
+---
+
+## Run it
+
+Requires **Node ≥ 22.6** (native TypeScript + built-in SQLite) and
+**Python ≥ 3.10**. No `npm install`. No `pip install`. No Docker required.
+
+```bash
+git clone <this repo> tandem && cd tandem
+
+make demo     # end-to-end on throwaway ports: seed, match, scout, tear down
+make dev      # api :8080, matcher :8081, web :5173
+make test     # all three suites (110+ tests)
+```
+
+`make demo` is the fastest way to see it move. It boots both services on spare
+ports, creates twelve demo profiles, verifies them, prints who Ada should meet,
+demonstrates the refused lookup, runs the scout against recorded data, and
+cleans up after itself.
+
+### Then, by hand
+
+```bash
+make dev
+./cli/tandemctl seed        # 12 verified demo people
+./cli/tandemctl match Ada   # ranked matches with reasons
+./cli/tandemctl doctor      # is everything up?
+```
+
+Open <http://127.0.0.1:5173> for the intake form. In dev mode the SMS code is
+returned in the API response, so no SMS provider is needed to run the flow.
+
+### Deploying for real
+
+```bash
+cp .env.example .env
+# fill in TANDEM_PEPPER (openssl rand -hex 32), TANDEM_PUBLIC_URL, TANDEM_SMS_WEBHOOK
+set -a; source .env; set +a
+./scripts/launch.sh
+```
+
+`launch.sh` refuses to start without a real pepper, because a consent platform
+running on a throwaway secret is not verifying anything. Put a TLS-terminating
+proxy in front of it; the API binds to loopback by default.
+
+[docs/launch-playbook.md](docs/launch-playbook.md) covers the four weeks before you show this to
+strangers.
+
+---
+
+## Architecture
+
+Polyglot on purpose: each service uses the tool that fits it, and the seams are
+HTTP so you can replace any one of them.
+
+```
+                        ┌────────────────────────┐
+   browser  ──────────► │  web/  (plain HTML/JS) │
+                        └───────────┬────────────┘
+                                    │ fetch + bearer token
+                        ┌───────────▼────────────┐        ┌──────────────────────┐
+                        │  services/api          │───────►│ services/matcher     │
+                        │  TypeScript, node:http │  HTTP  │ Python, stdlib       │
+                        │  profiles · consent    │        │ scoring · reasoning  │
+                        │  OTP · proofs · policy │        └──────────────────────┘
+                        └───────┬──────────┬─────┘
+                                │          │
+                     node:sqlite│          │public endpoints
+                        ┌───────▼──┐   ┌───▼──────────────────────────────┐
+                        │ SQLite   │   │ services/scout (Python)          │
+                        │ (db/)    │   │ HN · DEV · GitHub · Bluesky      │
+                        └──────────┘   │ → ranked invite queue, no DMs    │
+                                       └──────────────────────────────────┘
+```
+
+| Layer | Language | Why that language |
+| --- | --- | --- |
+| `services/api` | TypeScript on Node 24, zero dependencies | `node:sqlite` and native TS mean no build step and no `node_modules` to audit |
+| `services/matcher` | Python 3, stdlib only | scoring is arithmetic and policy; it should be readable by a non-engineer |
+| `services/scout` | Python 3, stdlib only | HTTP + text; reuses the matcher's vocabulary instead of inventing a second taxonomy |
+| `db/` | SQL | the schema is the data model document |
+| `cli/` | Python 3 | operator tooling that needs no install |
+| `web/` | HTML/CSS/JS, no framework | one form and one results list |
+| `scripts/`, `Makefile` | Bash + Make | `make demo` should work on a fresh laptop |
+
+Services talk over HTTP and JSON. Swap the Python matcher for a Rust one and the
+API does not change; `services/api/src/matcher.ts` is the only file that knows.
+
+---
+
+## How matching works
+
+Six factors, published weights, no black box:
+
+| factor | weight | what it measures |
+| --- | --- | --- |
+| goal | 30% | does each person want something the other offers |
+| interest | 25% | canonical-tag overlap, plus current project overlap |
+| availability | 15% | hours per week, as a ratio |
+| communication | 12% | pace, directness, group size, preferred channels |
+| timezone | 10% | working-hours overlap |
+| momentum | 8% | does something exist on the bench right now |
+
+Two hard caps: **no shared goal caps the pair at 0.22** however well everything
+else lines up, and **an unverified person caps at 0.35**. Nothing below 0.30 is
+shown at all.
+
+Every score returns its own breakdown and a list of plain-language reasons, plus
+*blockers*:
+
+```
+0.833  Jon   + You want a project partner and they offer it
+             + Shares 1 interest: security
+             + Similar time to give (6h and 6h per week)
+             - 11.5h apart, almost no overlap
+```
+
+You are meant to be able to argue with a match. Details, including the
+mentor/mentee complement and the reciprocity matrix, are in
+[docs/matching.md](docs/matching.md).
+
+---
+
+## Consent model in one screen
+
+```
+POST /v1/people                    → profile + a bearer token (shown once)
+POST /v1/consent/phone/start       → 6-digit code, TTL 10 min, rate limited
+POST /v1/consent/phone/verify      → consent receipt, HMAC over a canonical body
+GET  /v1/matches                   → 403 until at least one identifier is verified
+GET  /v1/consent                   → every consent, with scope and receipt hash
+POST /v1/consent/:id/revoke        → consent dies, derived signals die with it
+GET  /v1/export                    → everything held about you
+DELETE /v1/people/:id              → erases profile, consents, proofs, signals
+```
+
+Social accounts link by **proof post**, not by password and not by scraping: the
+server generates a nonce, you paste it on your own profile, the server reads it
+back from the public API and records the permalink. Discord and Facebook use
+OAuth instead, with the client ID left to the deployer.
+
+Full design, including why the phone number is a hash and why revocation is a
+transaction, is in [docs/consent-model.md](docs/consent-model.md).
+
+---
+
+## The scout
+
+`services/scout` answers one question: **who is talking about this topic in
+public, recently, across more than one thread?**
+
+It then writes a digest someone has to read, and a draft reply someone has to
+post. That is the whole pipeline.
+
+```bash
+make scout        # replay recorded observations, no network
+make scout-live   # Hacker News, DEV, GitHub issues, Bluesky — public endpoints
+```
+
+Output lands in `data/scout/`: `queue.json`, `digest.md`, `report.json`.
+
+Enforced by `services/scout/tandem_scout/policy.py` and pinned by tests:
+
+- contact details found in public text are **redacted on ingest**, not stored
+- invites are `public_thread` only; `dm`, `email`, `sms` raise `PolicyViolation`
+- one invite per handle, 25 per run, 45-day recency window, two observations and
+  one thread minimum before a stranger is worth interrupting
+- an opt-out file that wins over everything else
+- the same handle on two platforms stays two candidates; no identity merging
+- Reddit is disabled by default with the reason in code: its unauthenticated JSON
+  is 403 for non-browsers and doing it properly needs OAuth plus a terms
+  acceptance
+
+[docs/discovery-playbook.md](docs/discovery-playbook.md) maps the communities worth being in, what each
+one actually exposes, and the invitation script.
+
+---
+
+## Tests
+
+```bash
+make test        # everything
+make test-fast   # api + matcher
+```
+
+| suite | count | covers |
+| --- | --- | --- |
+| `services/matcher/test` | 36 | scoring, vocabulary, caps, ranking, malformed input |
+| `services/api/test` | 47 | consent flow, OTP replay/rate limits, receipts, proofs, policy, erasure |
+| `services/scout/test` | 39 | adapters, PII scrubbing, queue rules, opt-out, end-to-end replay |
+
+No network in any of them. `scripts/demo.sh` is the integration test, and CI runs
+both.
+
+The tests worth reading first:
+
+- `services/api/test/api.test.ts` → *"makes the receipt hash recomputable by
+  anyone holding the receipt"*
+- `services/scout/test/test_scout.py` → *"only public thread invites are
+  allowed"*
+
+---
+
+## Repository layout
+
+```
+.
+├── README.md
+├── Makefile                 make dev / demo / test / scout
+├── db/001_init.sql          reference schema (Postgres)
+├── docs/
+│   ├── positioning.md       the wedge, and why not "meet anyone"
+│   ├── consent-model.md     identifiers, receipts, revocation, no reverse lookup
+│   ├── threat-model.md      stalking, scraping, catfishing, doxxing, and mitigations
+│   ├── matching.md          factors, weights, caps, complementarity
+│   ├── discovery-playbook.md where to find communities, how to invite
+│   ├── launch-playbook.md   four weeks of validation gates before real users
+│   └── api.md               endpoint reference with curl examples
+├── services/
+│   ├── api/                 TypeScript, consent + policy + storage
+│   ├── matcher/             Python, explainable scoring
+│   └── scout/               Python, public signals → invite queue
+├── cli/tandemctl            Python operator CLI
+├── web/index.html           the intake form
+├── scripts/                 dev.sh, demo.sh, launch.sh
+└── data/demo-profiles.json  12-person demo cohort
+```
+
+---
+
+## Design decisions you may want to argue with
+
+**Verification is a hard gate.** Unverified profiles exist and can be edited, but
+never appear in someone's matches. It costs you signups and it buys you a network
+where every person in the results is a person.
+
+**A profile with no goal cannot be created.** The API rejects it. An empty goal
+means an empty results screen forever, and a user who concludes the product is
+broken.
+
+**Scores are capped, not ranked.** A beautiful 0.95 on interests with no shared
+goal still lands at 0.22, because "we both like AI" is not a reason to meet.
+
+**The scout outputs a draft, not a send.** Automating the delivery would 10x the
+volume and turn a small honest product into a spam operation.
+
+**No ranking by engagement, no streaks, no notifications.** There is nothing to
+come back for except the work.
+
+---
+
+## Roadmap
+
+- [x] consent-first profiles, receipts, revocation, erasure
+- [x] explainable matching with published weights
+- [x] social linking by proof post and OAuth
+- [x] public-signal scout with a hard policy boundary
+- [x] operator CLI, demo cohort, end-to-end demo
+- [ ] group matching: three to five people around one project, not just pairs
+- [ ] project pages with a commit log so "current project" is checkable
+- [ ] Postgres adapter behind `services/api/src/db.ts`
+- [ ] second scout vocabulary for the language-learning and marathon niches
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+If you fork this: keep `services/api/src/policy.ts`,
+`services/scout/tandem_scout/policy.py`, and their tests. Everything else is
+negotiable. Those three files are the product.

@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""tandemctl — a small operator CLI for a Tandem deployment.
+
+    ./tandemctl doctor                  check your environment and services
+    ./tandemctl seed [--remove]         load the demo cohort, verified
+    ./tandemctl match <display_name>    show one person's ranked matches
+    ./tandemctl receipts <token>        verify consent receipts locally
+    ./tandemctl export <token>          dump your own data
+
+Talks to the API over HTTP with the standard library only. No dependencies,
+because a CLI you have to install is a CLI nobody runs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import hmac
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_BASE = os.environ.get("TANDEM_BASE_URL", "http://127.0.0.1:8080")
+
+GREEN, RED, YELLOW, DIM, BOLD, RESET = (
+    "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[1m", "\033[0m"
+)
+
+
+def colour(text: str, tone: str) -> str:
+    if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+        return text
+    return f"{tone}{text}{RESET}"
+
+
+class Client:
+    def __init__(self, base: str) -> None:
+        self.base = base.rstrip("/")
+
+    def call(self, method: str, path: str, body: dict | None = None, token: str | None = None):
+        url = f"{self.base}{path}"
+        data = json.dumps(body).encode() if body is not None else None
+        request = urllib.request.Request(url, data=data, method=method)
+        if data:
+            request.add_header("Content-Type", "application/json")
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                raw = response.read().decode()
+                return response.status, (json.loads(raw) if raw else None)
+        except urllib.error.HTTPError as exc:
+            payload = exc.read().decode()
+            try:
+                return exc.code, json.loads(payload)
+            except json.JSONDecodeError:
+                return exc.code, {"raw": payload}
+        except urllib.error.URLError as exc:
+            raise SystemExit(
+                f"{colour('cannot reach', RED)} {url}\n"
+                f"  {exc.reason}\n"
+                f"  Is the API running? Try: {colour('make dev', BOLD)}"
+            )
+
+    def must(self, method: str, path: str, body: dict | None = None, token: str | None = None):
+        status, payload = self.call(method, path, body, token)
+        if status >= 400:
+            detail = payload.get("detail") if isinstance(payload, dict) else payload
+            raise SystemExit(f"{colour(f'{status}', RED)} {method} {path}: {detail or payload}")
+        return payload
+
+
+# ------------------------------------------------------------------ doctor ----
+
+def cmd_doctor(args) -> int:
+    client = Client(args.base)
+    ok = True
+    print(colour("tandem doctor", BOLD))
+
+    print(f"  python      {sys.version.split()[0]}")
+
+    try:
+        api = client.must("GET", "/healthz")
+        print(f"  api         {colour('ok', GREEN)}  {args.base}  ({api.get('people', 0)} people)")
+    except SystemExit:
+        print(f"  api         {colour('unreachable', RED)}  {args.base}")
+        ok = False
+
+    try:
+        matcher = client.must("GET", "/v1/stats")
+        print(f"  verified    {matcher.get('verified', 0)} of {matcher.get('people', 0)} people")
+    except SystemExit:
+        ok = False
+
+    engine = os.environ.get("MATCHER_URL", "http://127.0.0.1:8081")
+    try:
+        with urllib.request.urlopen(f"{engine}/version", timeout=5) as response:
+            version = json.loads(response.read().decode())
+        print(f"  matcher     {colour('ok', GREEN)}  v{version['engine_version']} at {engine}")
+        print(f"  factors     {', '.join(f'{k}={v}' for k, v in version['weights'].items())}")
+    except Exception:
+        print(f"  matcher     {colour('unreachable', RED)}  {engine}")
+        ok = False
+
+    policy = None
+    try:
+        policy = client.must("GET", "/v1/policy")
+    except SystemExit:
+        pass
+    if policy:
+        print(f"  policy      {policy['policy_version']}")
+        print(f"  lookup      {colour(policy['reverse_lookup'], DIM)}")
+
+    if not ok:
+        print(colour("\nsomething is down. make dev starts both services.", YELLOW))
+    return 0 if ok else 1
+
+
+# -------------------------------------------------------------------- seed ----
+
+def load_demo() -> list[dict]:
+    path = ROOT / "data" / "demo-profiles.json"
+    data = json.loads(path.read_text())
+    return data["profiles"]
+
+
+def cmd_seed(args) -> int:
+    client = Client(args.base)
+    profiles = load_demo()
+    print(f"seeding {len(profiles)} demo profiles into {args.base}")
+
+    created: dict[str, str] = {}
+    for profile in profiles:
+        phone = profile.pop("phone", None)
+        try:
+            payload = client.must("POST", "/v1/people", profile)
+        except SystemExit as exc:
+            print(f"  {profile['display_name']:<8} {colour('skipped', YELLOW)} {exc}")
+            continue
+
+        token = payload["token"]
+        person_id = payload["person"]["id"]
+        created[profile["display_name"]] = token
+
+        if phone and not args.no_verify:
+            start = client.must("POST", "/v1/consent/phone/start", {"phone": phone}, token)
+            code = start.get("dev_code")
+            if not code:
+                print(f"  {profile['display_name']:<8} created, needs a real SMS code")
+                continue
+            result = client.must(
+                "POST", "/v1/consent/phone/verify",
+                {"challenge_id": start["challenge_id"], "code": code}, token,
+            )
+            status = result.get("status")
+            print(f"  {profile['display_name']:<8} {colour('verified', GREEN)}  id={person_id[:8]}")
+        else:
+            print(f"  {profile['display_name']:<8} created   id={person_id[:8]}")
+
+    tokens_path = ROOT / "data" / "demo-tokens.json"
+    tokens_path.write_text(json.dumps(created, indent=2) + "\n")
+    os.chmod(tokens_path, 0o600)
+    print(
+        f"\nwrote {colour(str(tokens_path), DIM)} (owner-readable). "
+        f"These are dev tokens, not production credentials."
+    )
+    print(f"next: {colour('make demo', BOLD)} or ./tandemctl match Ada --base " + args.base)
+    return 0
+
+
+# ------------------------------------------------------------------- match ----
+
+def cmd_match(args) -> int:
+    client = Client(args.base)
+    tokens_path = ROOT / "data" / "demo-tokens.json"
+    if not tokens_path.exists():
+        raise SystemExit("no demo tokens yet. Run: ./tandemctl seed")
+
+    tokens = json.loads(tokens_path.read_text())
+    name = args.name
+    if name not in tokens:
+        close = [candidate for candidate in tokens if candidate.lower().startswith(name.lower())]
+        if len(close) == 1:
+            name = close[0]
+        else:
+            raise SystemExit(f"unknown person {name!r}. Known: {', '.join(sorted(tokens))}")
+
+    result = client.must("POST", "/v1/matches", {"limit": args.limit}, tokens[name])
+    rows = result["matches"]
+    print(
+        f"\n{colour(name, BOLD)} — engine {result['engine_version']}, "
+        f"{result['candidates_considered']} candidates considered\n"
+    )
+    if not rows:
+        print("  no matches above the floor. That is a real answer, not an error.")
+        return 0
+
+    for row in rows:
+        person = row.get("person") or {}
+        bar_len = int(round(row["score"] * 30))
+        bar = "█" * bar_len + "·" * (30 - bar_len)
+        score = f"{row['score']:.3f}"
+        print(f"  {colour(score, GREEN)} {bar}  {colour(person.get('display_name', '?'), BOLD)}")
+        if person.get("headline"):
+            print(f"        {colour(person['headline'], DIM)}")
+        for reason in row["reasons"][:3]:
+            print(f"        + {reason}")
+        for blocker in row["blockers"][:2]:
+            print(f"        {colour('- ' + blocker, YELLOW)}")
+        print()
+    return 0
+
+
+# ---------------------------------------------------------------- receipts ----
+
+def canonicalize(body: dict) -> str:
+    """Must match services/api/src/consent.ts: sorted keys, no whitespace."""
+    parts = []
+    for key in sorted(body):
+        value = body[key]
+        if isinstance(value, list):
+            rendered = "[" + ",".join(json.dumps(item) for item in value) + "]"
+        else:
+            rendered = json.dumps(value)
+        parts.append(f"{json.dumps(key)}:{rendered}")
+    return "{" + ",".join(parts) + "}"
+
+
+def cmd_receipts(args) -> int:
+    client = Client(args.base)
+    payload = client.must("GET", "/v1/export", token=args.token)
+    consents = payload.get("consents", [])
+    if not consents:
+        print("no consents on this account")
+        return 0
+
+    print(f"\n{len(consents)} consent(s)\n")
+    for consent in consents:
+        print(f"  {consent['kind']:<9} {consent['subject_hint'] or '-':<16} {consent['status']}")
+        print(f"      scope   {', '.join(consent['scope'])}")
+        print(f"      policy  {consent['policy_version']}  granted {consent['granted_at']}")
+        print(f"      receipt {consent['receipt_hash']}")
+        print()
+
+    print(
+        "  A receipt is HMAC-SHA256 over a canonical receipt body (sorted keys, no\n"
+        "  whitespace) and is recomputable by anyone holding that body. The export\n"
+        "  deliberately omits the subject hash, so a leaked export cannot be used to\n"
+        "  test guesses against identifiers. Keep the body you were shown at grant time.\n"
+    )
+    return 0
+
+
+# ------------------------------------------------------------------ export ----
+
+def cmd_export(args) -> int:
+    client = Client(args.base)
+    payload = client.must("GET", "/v1/export", token=args.token)
+    text = json.dumps(payload, indent=2, sort_keys=True)
+    if args.out:
+        Path(args.out).write_text(text + "\n")
+        print(f"wrote {args.out} ({len(text)} bytes)")
+    else:
+        print(text)
+    return 0
+
+
+# -------------------------------------------------------------------- main ----
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="tandemctl", description=__doc__.splitlines()[0])
+    parser.add_argument("--base", default=DEFAULT_BASE, help=f"API base url (default {DEFAULT_BASE})")
+    subs = parser.add_subparsers(dest="command", required=True)
+
+    subs.add_parser("doctor", help="check environment and services").set_defaults(func=cmd_doctor)
+
+    seed = subs.add_parser("seed", help="load the demo cohort")
+    seed.add_argument("--no-verify", action="store_true", help="skip phone verification")
+    seed.set_defaults(func=cmd_seed)
+
+    match = subs.add_parser("match", help="show one person's matches")
+    match.add_argument("name", help="display name from the demo cohort")
+    match.add_argument("--limit", type=int, default=6)
+    match.set_defaults(func=cmd_match)
+
+    receipts = subs.add_parser("receipts", help="inspect consent receipts")
+    receipts.add_argument("token")
+    receipts.set_defaults(func=cmd_receipts)
+
+    export = subs.add_parser("export", help="dump your own data")
+    export.add_argument("token")
+    export.add_argument("--out")
+    export.set_defaults(func=cmd_export)
+
+    args = parser.parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

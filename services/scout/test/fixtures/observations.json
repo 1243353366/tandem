@@ -1,0 +1,113 @@
+{
+  "_comment": "Recorded public observations used by --replay and by CI. age_days keeps these from going stale.",
+  "observations": [
+    {
+      "source": "hackernews",
+      "handle": "realtimearcher",
+      "text": "Ask HN: how do you evaluate LLM agents without a labelled set? We keep landing on human review and it does not scale.",
+      "url": "https://news.ycombinator.com/item?id=41000001",
+      "age_days": 2,
+      "topic": "ai",
+      "extra": { "thread": "hn:41000001" }
+    },
+    {
+      "source": "hackernews",
+      "handle": "realtimearcher",
+      "text": "Show HN: a small local-first evals harness for agent traces. Built it because every hosted option wanted my data.",
+      "url": "https://news.ycombinator.com/item?id=41000002",
+      "age_days": 6,
+      "topic": "ai",
+      "extra": { "thread": "hn:41000002" }
+    },
+    {
+      "source": "hackernews",
+      "handle": "realtimearcher",
+      "text": "Commented on the threat modelling of prompt injection in tool-using agents. The security story here is still bad.",
+      "url": "https://news.ycombinator.com/item?id=41000003",
+      "age_days": 11,
+      "topic": "security",
+      "extra": { "thread": "hn:41000003" }
+    },
+    {
+      "source": "hackernews",
+      "handle": "drivebycommenter",
+      "text": "Cool project. Following.",
+      "url": "https://news.ycombinator.com/item?id=41000010",
+      "age_days": 1,
+      "topic": "ai",
+      "extra": { "thread": "hn:41000010" }
+    },
+    {
+      "source": "hackernews",
+      "handle": "dmmeplz",
+      "text": "email me at jordan.builder@gmail.com or text +1 415 555 0134 if you want to collaborate on llm security work",
+      "url": "https://news.ycombinator.com/item?id=41000020",
+      "age_days": 3,
+      "topic": "security",
+      "extra": { "thread": "hn:41000020" }
+    },
+    {
+      "source": "devto",
+      "handle": "inesbuilds",
+      "text": "Designing an intake flow that does not feel like a job application — product design notes on onboarding for AI tools",
+      "url": "https://dev.to/inesbuilds/intake-flow-notes",
+      "age_days": 4,
+      "topic": "design",
+      "extra": { "thread": "https://dev.to/inesbuilds/intake-flow-notes" }
+    },
+    {
+      "source": "devto",
+      "handle": "inesbuilds",
+      "text": "What I learned shipping a tiny saas with a designer cofounder: scope is the product",
+      "url": "https://dev.to/inesbuilds/scope-is-the-product",
+      "age_days": 14,
+      "topic": "startups",
+      "extra": { "thread": "https://dev.to/inesbuilds/scope-is-the-product" }
+    },
+    {
+      "source": "github",
+      "handle": "rustysec",
+      "text": "detection rules carry no provenance — add the source of every rule so reviewers can audit it",
+      "url": "https://github.com/example/rules/issues/112",
+      "age_days": 5,
+      "topic": "security",
+      "extra": { "thread": "https://github.com/example/rules/issues/112" }
+    },
+    {
+      "source": "github",
+      "handle": "rustysec",
+      "text": "Add a python binding for the parser. Would like help, this is bigger than one weekend.",
+      "url": "https://github.com/example/parser/issues/88",
+      "age_days": 9,
+      "topic": "python",
+      "extra": { "thread": "https://github.com/example/parser/issues/88" }
+    },
+    {
+      "source": "github",
+      "handle": "rustysec",
+      "text": "Can we get a chaos test for the ingestion path? Evidence integrity matters when the collector dies mid-write.",
+      "url": "https://github.com/example/vault/issues/41",
+      "age_days": 20,
+      "topic": "security",
+      "extra": { "thread": "https://github.com/example/vault/issues/41" }
+    },
+    {
+      "source": "hackernews",
+      "handle": "oldprolific",
+      "text": "Long discussion about distributed systems consistency models",
+      "url": "https://news.ycombinator.com/item?id=40900001",
+      "age_days": 210,
+      "topic": "systems",
+      "extra": { "thread": "hn:40900001" }
+    },
+    {
+      "source": "hackernews",
+      "handle": "oldprolific",
+      "text": "Another long thread about database internals",
+      "url": "https://news.ycombinator.com/item?id=40900002",
+      "age_days": 300,
+      "topic": "systems",
+      "extra": { "thread": "hn:40900002" }
+    }
+  ]
+}

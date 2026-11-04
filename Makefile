@@ -1,0 +1,94 @@
+# Tandem — find people to build with.
+#
+#   make dev     bring the stack up locally
+#   make demo    prove it works end to end, on throwaway ports
+#   make test    run every suite
+#
+# Nothing here needs `npm install` or `pip install`. That is a feature.
+
+SHELL := /bin/bash
+PY := python3
+NODE := node
+
+API_DIR := services/api
+MATCHER_DIR := services/matcher
+SCOUT_DIR := services/scout
+
+.PHONY: help
+help:
+	@echo "tandem"
+	@echo
+	@echo "  make dev          run api + matcher + web on localhost"
+	@echo "  make demo         end-to-end demo on throwaway ports (safe to re-run)"
+	@echo "  make test         all suites (matcher, api, scout)"
+	@echo "  make test-fast    api + matcher only"
+	@echo "  make seed         load the demo cohort into a running api"
+	@echo "  make match        show Ada's matches from a running api"
+	@echo "  make doctor       check that a running deployment is healthy"
+	@echo "  make scout        discovery run against recorded data (no network)"
+	@echo "  make scout-live   discovery run against public endpoints"
+	@echo "  make web          serve the intake page on :5173"
+	@echo "  make clean        remove local runtime data"
+	@echo
+
+.PHONY: dev
+dev:
+	@./scripts/dev.sh
+
+.PHONY: demo
+demo:
+	@./scripts/demo.sh
+
+.PHONY: test
+test: test-matcher test-api test-scout
+	@echo
+	@echo "all suites passed"
+
+.PHONY: test-fast
+test-fast: test-matcher test-api
+
+.PHONY: test-matcher
+test-matcher:
+	@echo "── matcher ──"
+	@cd $(MATCHER_DIR) && $(PY) -m unittest discover -s test
+
+.PHONY: test-api
+test-api:
+	@echo "── api ──"
+	@cd $(API_DIR) && $(NODE) --test test/*.test.ts
+
+.PHONY: test-scout
+test-scout:
+	@echo "── scout ──"
+	@cd $(SCOUT_DIR) && $(PY) -m unittest discover -s test
+
+.PHONY: seed
+seed:
+	@./cli/tandemctl seed
+
+.PHONY: match
+match:
+	@./cli/tandemctl match Ada
+
+.PHONY: doctor
+doctor:
+	@./cli/tandemctl doctor
+
+.PHONY: scout
+scout:
+	@cd $(SCOUT_DIR) && $(PY) -m tandem_scout --replay test/fixtures --topics ai,security
+
+.PHONY: scout-live
+scout-live:
+	@cd $(SCOUT_DIR) && $(PY) -m tandem_scout --live --topics ai,security
+
+.PHONY: web
+web:
+	@cd web && $(PY) -m http.server 5173 --bind 127.0.0.1
+
+.PHONY: clean
+clean:
+	@rm -f data/tandem.db data/tandem.db-shm data/tandem.db-wal data/demo-tokens.json
+	@rm -rf data/scout
+	@find . -name __pycache__ -type d -prune -exec rm -rf {} +
+	@echo "cleaned local runtime data"

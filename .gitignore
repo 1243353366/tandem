@@ -1,0 +1,24 @@
+# runtime data
+data/tandem.db
+data/tandem.db-shm
+data/tandem.db-wal
+data/demo-tokens.json
+data/scout/
+.env
+
+# node
+node_modules/
+npm-debug.log*
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# editors / os
+.DS_Store
+.idea/
+.vscode/
+*.swp
