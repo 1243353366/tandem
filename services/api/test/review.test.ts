@@ -382,3 +382,19 @@ describe("the doors that were too wide", () => {
     assert.equal(response.status, 429);
   });
 });
+
+describe("a deployment cannot lie about sending codes", () => {
+  it("refuses to start in production without an SMS route", async () => {
+    const { loadConfig } = await import("../src/config.ts");
+    const saved = process.env.TANDEM_SMS_WEBHOOK;
+    delete process.env.TANDEM_SMS_WEBHOOK;
+    assert.throws(
+      () => loadConfig({ dev: false, pepper: "a".repeat(32) }),
+      /TANDEM_SMS_WEBHOOK is not set/,
+    );
+    process.env.TANDEM_SMS_WEBHOOK = "https://sms.example.test/send";
+    assert.doesNotThrow(() => loadConfig({ dev: false, pepper: "a".repeat(32) }));
+    if (saved === undefined) delete process.env.TANDEM_SMS_WEBHOOK;
+    else process.env.TANDEM_SMS_WEBHOOK = saved;
+  });
+});

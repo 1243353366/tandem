@@ -5,6 +5,19 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
 
 ## [Unreleased]
 
+### Fixed
+
+- **A production deployment with no SMS route now refuses to start.** With
+  `TANDEM_SMS_WEBHOOK` unset, `sendSms` logged and returned, so the API answered "code
+  sent" while delivering nothing; verification could never complete. `loadConfig` throws
+  instead, unless `TANDEM_DEV=1`.
+
+### Changed
+
+- **README says what the cap counts.** It read "two introductions per person per 14 days"
+  while the code caps matches revealed. The sentence now matches the code, and the
+  mismatch is recorded as a product question rather than hidden.
+
 ### Added
 
 - `docs/code-review.md`: the review every push gets. Claim-versus-code, gaps, doors,

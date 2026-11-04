@@ -210,7 +210,9 @@ mentor/mentee complement and the reciprocity matrix, are in
 
 ## Two matches a fortnight, and introductions in public
 
-Matching is capped at **two introductions per person per 14 days**, enforced in
+Matching is capped at **two matches per person per 14 days**, and an introduction needs a
+match, so that is also the ceiling on introductions. The cap counts matches shown, not
+threads opened: asking for matches is what spends the fortnight. Enforced in
 `services/api/src/quota.ts` and re-checked in the route, so a matcher that
 over-returns cannot exceed it. The cap applies **both ways**: someone already at
 their limit is not handed out to anyone else, and the window is keyed on

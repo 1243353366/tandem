@@ -86,5 +86,16 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     ...overrides,
   };
 
+  // A deployment with no SMS route says "code sent" and sends nothing, which looks
+  // exactly like success until a real person is stuck. Fail at startup instead of
+  // at the first verification.
+  if (!config.dev && !envStr("TANDEM_SMS_WEBHOOK")) {
+    throw new Error(
+      "TANDEM_SMS_WEBHOOK is not set, so phone verification would deliver nothing while " +
+        'reporting success. Point it at a URL that accepts {"to", "body"}, or set TANDEM_DEV=1 ' +
+        "for a local run where codes come back in the response.",
+    );
+  }
+
   return config;
 }
