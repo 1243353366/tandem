@@ -156,6 +156,13 @@ describe("erase actually erases", () => {
     const matched = await harness.api("POST", "/v1/matches", { token: person.token, body: { limit: 10 } });
     assert.equal(matched.status, 200);
     assert.equal(matched.json.matches.length, 2);
+    for (const [index, match] of matched.json.matches.entries()) {
+      const proposed = await harness.api("POST", "/v1/intros", {
+        token: person.token,
+        body: { peer_id: match.person_id, thread_url: `https://github.com/o/r/issues/${100 + index}` },
+      });
+      assert.equal(proposed.status, 201, JSON.stringify(proposed.json));
+    }
 
     const before = await harness.api("GET", "/v1/quota", { token: person.token });
     assert.equal(before.json.remaining, 0);
@@ -170,8 +177,13 @@ describe("erase actually erases", () => {
     assert.equal(quota.json.carried_over, 2, "the cap follows the phone, not the profile row");
     assert.equal(quota.json.remaining, 0);
 
-    const refused = await harness.api("POST", "/v1/matches", { token: again.token, body: { limit: 5 } });
-    assert.equal(refused.status, 403);
+    const browsed = await harness.api("POST", "/v1/matches", { token: again.token, body: { limit: 5 } });
+    assert.equal(browsed.status, 200, "browsing is still allowed at the introduction cap");
+    const refused = await harness.api("POST", "/v1/intros", {
+      token: again.token,
+      body: { peer_id: browsed.json.matches[0].person_id, thread_url: "https://github.com/o/r/issues/7" },
+    });
+    assert.equal(refused.status, 403, "but a third introduction is not");
   });
 });
 
@@ -242,9 +254,15 @@ describe("the cap is two a fortnight, both ways", () => {
   it("does not hand out someone who is already at their limit", async () => {
     const busy = await intake("Busy");
     await verifyPhone(busy.token, "+15550200020");
-    // Busy spends their own quota on two matches, so they are at their ceiling.
+    // Busy makes two introductions, so they are at their ceiling.
     const spent = await harness.api("POST", "/v1/matches", { token: busy.token, body: { limit: 2 } });
     assert.equal(spent.status, 200);
+    for (const [index, match] of spent.json.matches.entries()) {
+      await harness.api("POST", "/v1/intros", {
+        token: busy.token,
+        body: { peer_id: match.person_id, thread_url: `https://github.com/o/r/issues/${200 + index}` },
+      });
+    }
     const busyQuota = await harness.api("GET", "/v1/quota", { token: busy.token });
     assert.equal(busyQuota.json.remaining, 0);
 
@@ -396,5 +414,37 @@ describe("a deployment cannot lie about sending codes", () => {
     assert.doesNotThrow(() => loadConfig({ dev: false, pepper: "a".repeat(32) }));
     if (saved === undefined) delete process.env.TANDEM_SMS_WEBHOOK;
     else process.env.TANDEM_SMS_WEBHOOK = saved;
+  });
+});
+
+describe("browsing is limited separately from the cap", () => {
+  it("stops a browse at ten new faces a day", async () => {
+    const person = await intake("Enumerator");
+    await verifyPhone(person.token, "+15550200050");
+    const now = new Date().toISOString();
+    const insert = harness.db.prepare(
+      `INSERT INTO matches (id, a_id, b_id, score, score_breakdown, reasons, blockers, engine_version, created_at, matched_at)
+       VALUES (?, ?, ?, 0.5, '{}', '[]', '[]', 'review', ?, ?)`,
+    );
+    for (let index = 0; index < 10; index += 1) {
+      const ghost = await intake(`Ghost${index}`);
+      insert.run(`reveal-${index}`, person.id, ghost.id, now, now);
+    }
+    const blocked = await harness.api("POST", "/v1/matches", { token: person.token, body: { limit: 5 } });
+    assert.equal(blocked.status, 429);
+    assert.match(blocked.json.message, /ten|day|tomorrow/i);
+  });
+});
+
+describe("a failure can be traced to one request", () => {
+  it("returns a request id on success and on error, and puts it in the body", async () => {
+    const ok = await fetch(`${harness.base}/healthz`);
+    const okId = ok.headers.get("x-request-id");
+    assert.ok(okId && okId.length >= 8, "every response carries an id");
+
+    const blocked = await harness.api("POST", "/v1/people", { body: {} });
+    assert.equal(blocked.status, 400);
+    assert.ok(blocked.json.request_id, "an error body names the request that failed");
+    assert.notEqual(blocked.json.request_id, okId, "ids are per request, not per process");
   });
 });

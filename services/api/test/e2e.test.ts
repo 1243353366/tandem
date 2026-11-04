@@ -157,16 +157,21 @@ describe("the MVP flow, end to end", () => {
     matchedPeer = response.json.matches[0].person_id;
   });
 
-  it("3. the quota reports itself, and a third match is refused", async () => {
+  it("3. the quota reports itself, and browsing it does not spend the fortnight", async () => {
     const quota = await harness.api("GET", "/v1/quota", { token: people[0].token });
     assert.equal(quota.status, 200);
     assert.equal(quota.json.limit, 2);
-    assert.equal(quota.json.used, 2);
-    assert.equal(quota.json.remaining, 0);
+    assert.equal(quota.json.unit, "introductions");
+    // Two matches have been shown; no introduction has been made.
+    assert.equal(quota.json.used, 0);
+    assert.equal(quota.json.remaining, 2);
+    assert.ok(quota.json.reveals_today >= 2);
 
     const again = await harness.api("POST", "/v1/matches", { token: people[0].token, body: { limit: 5 } });
-    assert.equal(again.status, 403);
-    assert.match(again.json.message, /cap|fortnight|window/i);
+    assert.equal(again.status, 200, "browsing again is allowed inside the daily reveal limit");
+
+    const after = await harness.api("GET", "/v1/quota", { token: people[0].token });
+    assert.equal(after.json.remaining, 2, "looking at people does not consume introductions");
   });
 
   it("4. an introduction in a closed space is refused", async () => {

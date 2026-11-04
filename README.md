@@ -96,7 +96,7 @@ git clone <this repo> tandem && cd tandem
 
 make demo     # end-to-end on throwaway ports: seed, match, scout, tear down
 make dev      # api :8080, matcher :8081, web :5173
-make test     # all three suites (191 tests)
+make test     # all three suites (194 tests)
 ```
 
 `make demo` is the fastest way to see it move. It boots both services on spare
@@ -210,15 +210,18 @@ mentor/mentee complement and the reciprocity matrix, are in
 
 ## Two matches a fortnight, and introductions in public
 
-Matching is capped at **two matches per person per 14 days**, and an introduction needs a
-match, so that is also the ceiling on introductions. The cap counts matches shown, not
-threads opened: asking for matches is what spends the fortnight. Enforced in
+Introductions are capped at **two per person per 14 days**. Browsing is not: looking at
+who is around costs nothing, because the thing that costs someone else attention is the
+introduction, not the view. Browsing has its own ceiling so the cohort cannot be read in an
+afternoon: **two people per request, ten new people a day**. Enforced in
 `services/api/src/quota.ts` and re-checked in the route, so a matcher that
 over-returns cannot exceed it. The cap applies **both ways**: someone already at
 their limit is not handed out to anyone else, and the window is keyed on
 `matched_at`, which is written once and never refreshed by re-showing a pair.
-`GET /v1/quota` states where a person stands, when a slot frees up, and how much of
-their window carried over from a previous account on the same phone. Scarcity is
+`GET /v1/quota` states where a person stands: `unit: "introductions"`, how many are left,
+when a slot frees up, how much of the window carried over from a previous account on the
+same phone, and how many reveals are left today. The cap is checked on both sides when an
+introduction is made, so nobody is handed more attention than they can answer. Scarcity is
 the product decision: a list of ten people is not an introduction.
 
 An introduction is a **public thread the person chose**:
@@ -249,6 +252,7 @@ POST /v1/consent/phone/verify      → consent receipt, HMAC over a canonical bo
 GET  /v1/matches                   → 403 until at least one identifier is verified
 GET  /v1/consent                   → every consent, with scope and receipt hash
 POST /v1/consent/:id/revoke        → consent dies, derived signals die with it
+GET  /v1/quota                     → introductions left, reveals left today
 GET  /v1/export                    → everything held about you, inferred data included
 DELETE /v1/people/:id              → erases profile, consents, proofs, signals, intros
 ```
@@ -337,7 +341,7 @@ make test-fast   # api + matcher
 | suite | count | covers |
 | --- | --- | --- |
 | `services/matcher/test` | 36 | scoring, vocabulary, caps, ranking, malformed input |
-| `services/api/test` | 82 | consent flow, OTP replay and per-caller limits, receipts, proofs, policy, erasure, the cap both ways, export completeness, intro cooldown, CORS |
+| `services/api/test` | 85 | consent flow, OTP replay and per-caller limits, receipts, proofs, policy, erasure, the cap both ways, export completeness, intro cooldown, CORS |
 | `services/scout/test` | 73 | adapters, PII scrubbing, queue rules, opt-out, public/private surfaces, end-to-end replay |
 
 No network in any of them. `scripts/demo.sh` is the integration test, and CI runs

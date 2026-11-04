@@ -5,7 +5,32 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
 
 ## [Unreleased]
 
+### Changed
+
+- **The cap counts introductions, not views.** `POST /v1/matches` used to spend a person's
+  fortnight, so browsing the cohort cost them two introductions they never made. The cap is
+  now checked in `createIntro`, on both sides, and browsing has its own limit: two per
+  request, ten new people a day. `GET /v1/quota` reports `unit: "introductions"`,
+  `reveals_today` and `reveals_remaining_today`. Erased-account carry-over counts
+  introductions too (`retired_identities.count_at_retirement`, backfilled).
+
+### Added
+
+- **Request ids.** Every response carries `X-Request-Id`, error bodies include
+  `request_id`, and server-side error logs are prefixed with it, so a report of "something
+  broke" can be tied to one request.
+
 ### Fixed
+
+- **CORS headers reach the response, not only the preflight.** Routes that sent their own
+  body answered without `Access-Control-Allow-Origin`, so a browser approved the preflight
+  and then refused the response. The headers are set on the response once, in `handle`.
+- **Transactions can no longer nest.** Five write paths opened one by hand with
+  `db.exec("BEGIN")` and no guard; `removeHandle` called `revokeConsent` one line before
+  its own `BEGIN`, so the ordering was load-bearing and a nested `BEGIN` would throw at
+  runtime. `transaction()` in `db.ts` joins an open transaction instead. Two of those paths
+  also committed before writing their audit entry and reading the row back; both now happen
+  inside the transaction.
 
 - **A production deployment with no SMS route now refuses to start.** With
   `TANDEM_SMS_WEBHOOK` unset, `sendSms` logged and returned, so the API answered "code

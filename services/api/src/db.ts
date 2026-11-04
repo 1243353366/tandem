@@ -164,9 +164,11 @@ const SCHEMA = [
      kind TEXT NOT NULL,
      subject_hash TEXT NOT NULL,
      matches_at_retirement INTEGER NOT NULL DEFAULT 0,
+     count_at_retirement INTEGER,
      retired_at TEXT NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS retired_identities_lookup ON retired_identities (kind, subject_hash)`,
+  `CREATE INDEX IF NOT EXISTS intros_by_time ON intros (proposed_at)`,
 
 ];
 
@@ -196,6 +198,13 @@ function migrate(db: Db): void {
   if (!intros.has("closed_at")) {
     db.exec("ALTER TABLE intros ADD COLUMN closed_at TEXT");
   }
+  const retired = columns(db, "retired_identities");
+  if (!retired.has("count_at_retirement")) {
+    db.exec("ALTER TABLE retired_identities ADD COLUMN count_at_retirement INTEGER");
+    // The column used to count matches; those rows keep their number so an account
+    // erased before this change does not get its window handed back.
+    db.exec("UPDATE retired_identities SET count_at_retirement = matches_at_retirement");
+  }
 }
 
 export function openDb(path: string): Db {
@@ -206,6 +215,41 @@ export function openDb(path: string): Db {
   for (const statement of SCHEMA) db.exec(statement);
   migrate(db);
   return db;
+}
+
+const depth = new WeakMap<Db, number>();
+
+/**
+ * Run a block inside a transaction, or join the one already open.
+ *
+ * SQLite refuses a nested BEGIN, and five write paths used to open one by hand.
+ * Nothing nests them today, but the ordering was load-bearing: removeHandle calls
+ * revokeConsent immediately before its own BEGIN, and moving that line by one would
+ * have thrown at runtime rather than at compile time. Joining is the behaviour a
+ * caller expects, and it makes the ordering stop mattering.
+ */
+export function transaction<T>(db: Db, run: () => T): T {
+  const open = depth.get(db) ?? 0;
+  if (open > 0) {
+    depth.set(db, open + 1);
+    try {
+      return run();
+    } finally {
+      depth.set(db, open);
+    }
+  }
+  db.exec("BEGIN");
+  depth.set(db, 1);
+  try {
+    const value = run();
+    db.exec("COMMIT");
+    return value;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    depth.delete(db);
+  }
 }
 
 export function audit(

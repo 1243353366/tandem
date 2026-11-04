@@ -11,6 +11,7 @@ import type { Db } from "./db.ts";
 import { badRequest, conflict, forbidden, notFound } from "./errors.ts";
 import { newId } from "./crypto.ts";
 import { liveConsents } from "./store.ts";
+import { matchQuota } from "./quota.ts";
 
 /** How long a "no" holds before the same pair can be proposed again. */
 export const DECLINE_COOLDOWN_DAYS = 30;
@@ -162,6 +163,26 @@ export function createIntro(
     throw forbidden(
       `That did not happen, recently. An introduction to this person can be proposed again after ` +
         `${cooledFrom.slice(0, 10)}. A no is supposed to mean something here.`,
+    );
+  }
+
+  // The cap lives here, because an introduction is the unit that costs someone
+  // else's attention. While it was enforced on /v1/matches it also limited intros
+  // by accident; browsing is free now, so the cap has to be checked where the
+  // introduction is actually made, on both sides of it.
+  const proposerQuota = matchQuota(db, values.proposerId);
+  if (proposerQuota.remaining === 0) {
+    throw forbidden(
+      `You have made ${proposerQuota.used} introductions in the last ${proposerQuota.window_days} days, ` +
+        "which is the cap. Two a fortnight is deliberate: a list of ten people is not an introduction. " +
+        `A slot frees up at ${proposerQuota.frees_up_at ?? "the end of the window"}.`,
+    );
+  }
+  const peerQuota = matchQuota(db, values.peerId);
+  if (peerQuota.remaining === 0) {
+    throw forbidden(
+      "That person is at their limit for introductions this fortnight. " +
+        "They are not ignoring you; there is simply nothing to spend. Try again when their window moves.",
     );
   }
 

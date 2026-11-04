@@ -2,7 +2,7 @@
  * Data access. All SQL lives here so route handlers stay readable.
  */
 
-import { audit, isoIn, nowIso, parseJson } from "./db.ts";
+import { audit, isoIn, nowIso, parseJson, transaction } from "./db.ts";
 import type { Db } from "./db.ts";
 import { newId } from "./crypto.ts";
 
@@ -203,10 +203,7 @@ export function erasePerson(db: Db, id: string): void {
   const used = Number(
     (
       db
-        .prepare(
-          `SELECT COUNT(*) AS n FROM matches
-            WHERE (a_id = ? OR b_id = ?) AND COALESCE(matched_at, created_at) >= ?`,
-        )
+        .prepare(`SELECT COUNT(*) AS n FROM intros WHERE (a_id = ? OR b_id = ?) AND proposed_at >= ?`)
         .get(id, id, since) as { n?: number } | undefined
     )?.n ?? 0,
   );
@@ -214,13 +211,13 @@ export function erasePerson(db: Db, id: string): void {
     .prepare("SELECT kind, subject_hash FROM consents WHERE person_id = ? AND revoked_at IS NULL")
     .all(id) as Array<{ kind: string; subject_hash: string }>;
 
-  db.exec("BEGIN");
-  try {
+  return transaction(db, () => {
     for (const subject of subjects) {
       db.prepare(
-        `INSERT INTO retired_identities (id, kind, subject_hash, matches_at_retirement, retired_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      ).run(newId(), subject.kind, subject.subject_hash, used, nowIso());
+        `INSERT INTO retired_identities
+           (id, kind, subject_hash, matches_at_retirement, count_at_retirement, retired_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(newId(), subject.kind, subject.subject_hash, used, used, nowIso());
     }
     db.prepare(
       `UPDATE people SET
@@ -252,11 +249,7 @@ export function erasePerson(db: Db, id: string): void {
     db.prepare("DELETE FROM intros WHERE a_id = ? OR b_id = ? OR proposed_by = ?").run(id, id, id);
     db.prepare("DELETE FROM declared_handles WHERE person_id = ?").run(id);
     audit(db, id, "person.erased", null, { kept: "identifier hashes and match count only" });
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 // ------------------------------------------------------------- consents ----
@@ -354,8 +347,7 @@ export function revokeConsent(db: Db, personId: string, consentId: string): bool
     .get(consentId, personId) as ConsentRow | undefined;
   if (!row) return false;
   if (row.revoked_at) return true;
-  db.exec("BEGIN");
-  try {
+  return transaction(db, () => {
     db.prepare("UPDATE consents SET revoked_at = ? WHERE id = ?").run(nowIso(), consentId);
     db.prepare("DELETE FROM signals WHERE consent_id = ?").run(consentId);
     // A revoked phone means the account is no longer identity-verified.
@@ -363,12 +355,8 @@ export function revokeConsent(db: Db, personId: string, consentId: string): bool
       db.prepare("DELETE FROM phone_challenges WHERE person_id = ?").run(personId);
     }
     audit(db, personId, "consent.revoked", row.subject_hash, { kind: row.kind });
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-  return true;
+    return true;
+  });
 }
 
 // ----------------------------------------------------------- challenges ----

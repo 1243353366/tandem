@@ -10,13 +10,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
 import { audit } from "./db.ts";
-import { hashToken, newToken } from "./crypto.ts";
+import { hashToken, newId, newToken } from "./crypto.ts";
 import {
   ApiError,
   badRequest,
   conflict,
   forbidden,
   notFound,
+  tooMany,
   unauthorized,
 } from "./errors.ts";
 import {
@@ -48,6 +49,9 @@ import type { PersonRow } from "./store.ts";
 import { startPhoneConsent, verifyPhoneConsent } from "./consent.ts";
 import { closeIntro, createIntro, introView, listIntrosFor, respondToIntro } from "./intros.ts";
 import { matchQuota } from "./quota.ts";
+
+/** How many people one browse shows. */
+const MATCHES_PER_REQUEST = 2;
 import {
   NETWORKS,
   exchangeOAuthCode,
@@ -717,17 +721,22 @@ const ROUTES: Route[] = [
       }
 
       const body = (req.body ?? {}) as Record<string, unknown>;
-      // Two a fortnight, enforced here. This is product logic, not etiquette.
       const quota = matchQuota(ctx.db, person.id);
-      if (quota.remaining === 0) {
-        throw forbidden(
-          `You have had ${quota.used} introductions in the last ${quota.window_days} days, which is the cap. ` +
-            "Two a fortnight is deliberate: a list of ten people is not an introduction. " +
-            `A slot frees up at ${quota.frees_up_at ?? "the end of the window"}.`,
+
+      // The cap is on introductions, so being at it does not stop you looking. What
+      // stops here is enumeration: ten new faces a day is enough to see who is
+      // around, not enough to read the whole cohort.
+      if (quota.reveals_remaining_today === 0) {
+        throw tooMany(
+          "You have looked at ten new people today, which is the daily limit. " +
+            "It exists so nobody can read the whole cohort in an afternoon. Come back tomorrow.",
         );
       }
-      const requested = Number.isFinite(Number(body.limit)) ? Number(body.limit) : quota.remaining;
-      const limit = Math.max(1, Math.min(requested, quota.remaining));
+
+      // Two per request is the promise; ten a day is the ceiling. Both exist so that
+      // one afternoon cannot read the whole cohort.
+      const requested = Number.isFinite(Number(body.limit)) ? Number(body.limit) : MATCHES_PER_REQUEST;
+      const limit = Math.max(1, Math.min(requested, MATCHES_PER_REQUEST, quota.reveals_remaining_today));
 
       const searchable = listSearchable(ctx.db).filter((row) => row.id !== person.id);
       // The cap is two a fortnight for a person, not two a fortnight from them.
@@ -866,7 +875,14 @@ export function createApp(db: Db, config: Config, fetcher: FetchLike = fetch): A
   return {
     async handle(req, res) {
       const started = Date.now();
-      const headers = corsHeaders(req);
+      // Every response carries an id, and every server-side error is logged with it,
+      // so a report of "something broke" can be tied to one request.
+      const requestId = newId().slice(0, 12);
+      const headers = { ...corsHeaders(req), "X-Request-Id": requestId };
+      // Set them on the response, not just on the calls that remember to pass them:
+      // a route that sent its own body was answering without CORS or a request id,
+      // so a browser allowed the preflight and then refused the response.
+      for (const [name, value] of Object.entries(headers)) res.setHeader(name, value);
       const url = new URL(req.url ?? "/", "http://localhost");
       const path = url.pathname.replace(/\/+$/, "") || "/";
 
@@ -887,7 +903,7 @@ export function createApp(db: Db, config: Config, fetcher: FetchLike = fetch): A
         .find((entry) => entry.match !== null);
 
       if (!routed) {
-        send(res, 404, { error: "not_found", path }, headers);
+        send(res, 404, { error: "not_found", path, request_id: requestId }, headers);
         return;
       }
 
@@ -904,19 +920,33 @@ export function createApp(db: Db, config: Config, fetcher: FetchLike = fetch): A
       } catch (error) {
         if (res.headersSent) return;
         if (error instanceof ApiError) {
-          send(res, error.status, error.toJSON(), headers);
+          send(res, error.status, { ...error.toJSON(), request_id: requestId }, headers);
           return;
         }
         const code = (error as Error & { code?: string }).code;
         if (code === "reverse_lookup") {
-          send(res, 403, { ...REVERSE_LOOKUP_REFUSED, detail: error instanceof Error ? error.message : null }, headers);
+          send(
+            res,
+            403,
+            { ...REVERSE_LOOKUP_REFUSED, detail: error instanceof Error ? error.message : null, request_id: requestId },
+            headers,
+          );
           return;
         }
-        console.error("[tandem] unhandled route error", error);
-        send(res, 500, { error: "internal", message: "Something broke on our side." }, headers);
+        console.error(`[tandem] ${requestId} unhandled error on ${req.method} ${path}`, error);
+        send(
+          res,
+          500,
+          {
+            error: "internal",
+            message: "Something broke on our side.",
+            request_id: requestId,
+          },
+          headers,
+        );
       } finally {
         if (config.dev) {
-          const line = `${req.method} ${path} -> ${res.statusCode} (${Date.now() - started}ms)`;
+          const line = `${requestId} ${req.method} ${path} -> ${res.statusCode} (${Date.now() - started}ms)`;
           if (res.statusCode >= 500) console.error(`[tandem] ${line}`);
         }
       }

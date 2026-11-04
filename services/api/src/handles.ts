@@ -23,7 +23,7 @@
  * the reading is *about*: the person who asked for it.
  */
 
-import { audit } from "./db.ts";
+import { audit, transaction } from "./db.ts";
 import type { Db } from "./db.ts";
 import type { Config } from "./config.ts";
 import { digest, handleHint } from "./crypto.ts";
@@ -229,8 +229,7 @@ export function declareHandle(
   // takes the derived signals with it.
   if (existing?.consent_id) revokeConsent(db, personId, String(existing.consent_id));
 
-  db.exec("BEGIN");
-  try {
+  return transaction(db, () => {
     if (existing) {
       db.prepare("DELETE FROM declared_handles WHERE id = ?").run(String(existing.id));
     }
@@ -254,14 +253,10 @@ export function declareHandle(
        VALUES (?, ?, ?, ?, 'self_declared', 0, ?, NULL, ?, ?)`,
     ).run(id, personId, network, handle, consent.id, now, now);
 
-    db.exec("COMMIT");
     audit(db, personId, "handle.declared", subjectHash, { network });
     const row = db.prepare("SELECT * FROM declared_handles WHERE id = ?").get(id) as Record<string, unknown>;
     return handleView(row);
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 export function listHandles(db: Db, personId: string): HandleView[] {
@@ -279,14 +274,9 @@ export function removeHandle(db: Db, personId: string, handleId: string): boolea
 
   if (row.consent_id) revokeConsent(db, personId, String(row.consent_id));
 
-  db.exec("BEGIN");
-  try {
+  return transaction(db, () => {
     db.prepare("DELETE FROM declared_handles WHERE id = ?").run(handleId);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
   audit(db, personId, "handle.removed", null, { network: row.network });
   return true;
 }
@@ -386,8 +376,7 @@ export function applyMemberSignals(
     throw conflict(`That member has no live handle consent for ${network}, so there is nothing to derive.`);
   }
 
-  db.exec("BEGIN");
-  try {
+  return transaction(db, () => {
     db.prepare("DELETE FROM signals WHERE person_id = ? AND kind = 'interest' AND source LIKE 'handle:%'")
       .run(personId);
     const insert = db.prepare(
@@ -414,13 +403,9 @@ export function applyMemberSignals(
         stored += 1;
       }
     }
-    db.exec("COMMIT");
     audit(db, personId, "signals.derived", null, { networks: sources, tags: interests.length });
     return { stored, interests };
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 function scopesOf(row: Record<string, unknown>): string[] {
