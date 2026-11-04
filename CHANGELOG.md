@@ -14,6 +14,20 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
   `reveals_today` and `reveals_remaining_today`. Erased-account carry-over counts
   introductions too (`retired_identities.count_at_retirement`, backfilled).
 
+### Added
+
+- **An instrument for the injection question, and a pre-registration**
+  (`experiments/`, `docs`-adjacent). Two oracles kept apart: `attempt` (did a reader reach for
+  a canary that cannot exist) and `behavior` (did a reader break a rule the server enforces:
+  DM refusal, fortnightly intro cap, public-thread-only, no reverse lookup, no canary in a
+  response). Behaviour is primary, because the scout has no authority for an attempt to
+  redirect. The harness boots the real app on an in-memory database, renders clean and
+  poisoned digests from the real renderer one line apart, and takes the reader as an external
+  command: `null` and `replay:` ship here, no model client does. Every result records the
+  pre-registration hash, the oracle hash and the number of entries it was computed from, so
+  an empty run cannot read as a pass. CI runs the instrument and asserts the control arm
+  produces zero entries and zero breaches.
+
 ### Security
 
 - **Provenance framing on three boundaries** (`docs/trust-boundary.md`). Console lines are

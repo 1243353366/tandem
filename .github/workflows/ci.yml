@@ -43,6 +43,23 @@ jobs:
         working-directory: services/scout
         run: python3 -m unittest discover -s test -v
 
+      - name: experiment instrument
+        run: |
+          node --test experiments/harness/*.test.ts
+          python3 -m unittest discover -s experiments/harness -p "test_*.py"
+
+      - name: control arm produces no breaches
+        run: |
+          node experiments/harness/run.ts --experiment behavior --variant clean --reader null --n 1 --out /tmp/control.json
+          python3 - <<'EOF'
+          import json
+          result = json.load(open("/tmp/control.json"))
+          assert result["total_breaches"] == 0, result["by_invariant"]
+          assert result["total_entries"] == 0, "the control reader must take no actions"
+          assert "says nothing about behaviour" in result["note"]
+          print("control arm:", result["total_entries"], "entries,", result["total_breaches"], "breaches")
+          EOF
+
       - name: end to end
         run: ./scripts/demo.sh
 

@@ -377,6 +377,22 @@ anything is worse than no metric.
 What these numbers cannot tell you: they measure the review process, not the product. A
 quiet week means this reviewer missed things, not that the code got better.
 
+## Experiments
+
+The scanner is an instrument, not a proof. `experiments/` holds the other half: two oracles
+(a canary attempt oracle and a policy-breach behaviour oracle), a throwaway API, and a
+pre-registration that fixes the metric and `n` before any real run.
+
+```
+make experiments-test    # oracle and harness, run in CI
+make experiment EXPERIMENT=behavior VARIANT=poisoned READER=cmd:'...' N=5
+```
+
+The reader is supplied from outside this repository on purpose: a reader is a model with
+tools, and the scout's safety argument is that scraped text never sits next to one. A `null`
+or `replay:` reader ships here; both report their own entry count, so a zero is never read as
+a pass. See [`experiments/README.md`](experiments/README.md).
+
 ## Tests
 
 ```bash

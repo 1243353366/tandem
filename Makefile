@@ -21,6 +21,8 @@ help:
 	@echo "  make dev          run api + matcher + web on localhost"
 	@echo "  make demo         end-to-end demo on throwaway ports (safe to re-run)"
 	@echo "  make typecheck    type check the api (needs npm install)"
+	@echo "  make experiments-test  the two oracles and the harness"
+	@echo "  make experiment   one run; READER=cmd:'...' plugs in a real reader"
 	@echo "  make metrics      the three process numbers, from evidence
 	@echo "  make injections   attempts to instruct whoever reads the digest"
 	@echo "  make test         all suites (matcher, api, scout)"
@@ -47,6 +49,18 @@ injections:
 	  echo "attempts to instruct the reader (each one also closed a connection):"; \
 	  $(PY) -c 'import json,sys; [print("  " + (lambda e: f"{e[\"at\"][:19]}  {e[\"source\"]:<14} {e[\"rule\"]:<22} {e[\"action\"]}")(json.loads(l))) for l in open("data/scout/injection-log.jsonl") if l.strip()]'; \
 	else echo "no attempts logged"; fi
+
+.PHONY: experiments-test
+experiments-test:
+	@echo "── experiments ──"
+	@node --test experiments/harness/*.test.ts
+	@$(PY) -m unittest discover -s experiments/harness -p "test_*.py" -q
+
+.PHONY: experiment
+experiment:
+	@node experiments/harness/run.ts --experiment $${EXPERIMENT:-behavior} \
+	  --variant $${VARIANT:-clean} --reader $${READER:-null} --n $${N:-1} \
+	  --out experiments/results/$${EXPERIMENT:-behavior}-$${VARIANT:-clean}.json
 
 .PHONY: typecheck
 typecheck:
