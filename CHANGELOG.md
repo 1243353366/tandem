@@ -5,6 +5,11 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
 
 ## [Unreleased]
 
+### Added
+
+- `docs/code-review.md`: the review every push gets. Claim-versus-code, gaps, doors,
+  data rights, and the failing-first test rule. Linked from the README.
+
 ## [0.1.1] - 2026-11-04
 
 Fixes from the first code review. Every item has a regression test in

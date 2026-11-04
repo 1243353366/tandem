@@ -341,6 +341,10 @@ make test-fast   # api + matcher
 No network in any of them. `scripts/demo.sh` is the integration test, and CI runs
 both.
 
+Every push gets a review against the promises rather than the style:
+[docs/code-review.md](docs/code-review.md). The first one found ten defects while 180
+tests were passing, which is the argument for the checklist.
+
 The tests worth reading first:
 
 - `services/api/test/api.test.ts` → *"makes the receipt hash recomputable by
