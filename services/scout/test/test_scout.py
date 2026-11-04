@@ -610,9 +610,10 @@ class TestMemberEnrichment(unittest.TestCase):
 
     def test_declared_but_unreadable_networks_say_so(self):
         from tandem_scout import members
-        result = members.enrich_member(members.MemberHandle("p3", "mastodon", "a@b.social"))
+        # instagram is declared but dark: no public read path without a session
+        result = members.enrich_member(members.MemberHandle("p3", "instagram", "a_builder"))
         self.assertEqual(result.interests, [])
-        self.assertIn("no reader", result.errors[0])
+        self.assertIn("no public reader", result.errors[0])
 
     def test_a_failing_platform_does_not_stop_the_others(self):
         from tandem_scout import members
@@ -661,3 +662,89 @@ class TestMemberEnrichment(unittest.TestCase):
         result = members.enrich_member(members.MemberHandle("p7", "github", "x"), http)
         self.assertNotIn("draft", result.to_payload())
         self.assertEqual(set(result.to_payload()), {"person_id", "interests", "observations", "sources", "evidence_urls"})
+
+
+class TestWiderReaders(unittest.TestCase):
+    """Every reader here uses a documented, unauthenticated public API."""
+
+    def _http(self, mapping):
+        def get(url: str):
+            for fragment, payload in mapping.items():
+                if fragment in url:
+                    return payload
+            raise AssertionError(f"unexpected url: {url}")
+        return get
+
+    def test_mastodon_reads_the_instance_the_handle_names(self):
+        from tandem_scout import members
+        seen = []
+
+        def get(url):
+            seen.append(url)
+            if "lookup" in url:
+                return {"id": "42"}
+            return [{"content": "<p>agent evals in <b>python</b></p>", "url": "https://hachyderm.io/@x/1"}]
+
+        result = members.enrich_member(members.MemberHandle("p", "mastodon", "x@hachyderm.io"), get)
+        self.assertIn("https://hachyderm.io/api/v1/accounts/lookup", seen[0])
+        self.assertIn("hachyderm.io", seen[1])
+        self.assertIn("python", result.interests)
+        self.assertEqual(result.evidence_urls, ["https://hachyderm.io/@x/1"])
+
+    def test_reddit_reads_submitted_posts_not_a_search(self):
+        from tandem_scout import members
+        seen = []
+        payload = {"data": {"children": [
+            {"data": {"title": "security notes on agents", "permalink": "/r/netsec/1"}},
+            {"data": {"title": "ai evals", "selftext": "python harness", "permalink": "/r/ml/2"}},
+        ]}}
+
+        def get(url):
+            seen.append(url)
+            return payload
+
+        result = members.enrich_member(members.MemberHandle("p", "reddit", "quiet_builder"), get)
+        self.assertIn("/user/quiet_builder/submitted.json", seen[0])
+        self.assertEqual(result.observations, 2)
+        self.assertIn("ai", result.interests)
+
+    def test_gitlab_resolves_the_user_then_lists_their_projects(self):
+        from tandem_scout import members
+        http = self._http({
+            "/users?": [{"id": 7}],
+            "/projects": [{"name": "evals", "description": "ai harness", "topics": ["security"],
+                           "web_url": "https://gitlab.com/x/evals"}],
+        })
+        result = members.enrich_member(members.MemberHandle("p", "gitlab", "someone.name"), http)
+        self.assertIn("ai", result.interests)
+        self.assertIn("security", result.interests)
+
+    def test_codeberg_skips_forks_like_github_does(self):
+        from tandem_scout import members
+        http = self._http({"/repos": [
+            {"name": "agents", "description": "ai agents", "language": "Python", "html_url": "https://codeberg.org/x/a"},
+            {"name": "forked", "fork": True, "description": "not theirs"},
+        ]})
+        result = members.enrich_member(members.MemberHandle("p", "codeberg", "patch-worker"), http)
+        self.assertEqual(result.observations, 1)
+        self.assertEqual(result.evidence_urls, ["https://codeberg.org/x/a"])
+
+    def test_stackoverflow_answers_are_stripped_of_markup(self):
+        from tandem_scout import members
+        http = self._http({"/answers": {"items": [
+            {"body": "<p>security modelling</p><pre>python</pre>", "link": "https://stackoverflow.com/a/1"}
+        ]}})
+        result = members.enrich_member(members.MemberHandle("p", "stackoverflow", "1234567"), http)
+        self.assertIn("security", result.interests)
+        self.assertNotIn("<p>", " ".join(result.interests))
+
+    def test_snapchat_is_declared_but_never_read(self):
+        from tandem_scout import members
+        def get(url):
+            raise AssertionError("snapchat must not be fetched at all")
+
+        result = members.enrich_member(members.MemberHandle("p", "snapchat", "snap.dev"), get)
+        self.assertEqual(result.interests, [])
+        self.assertEqual(result.observations, 0)
+        self.assertIn("no public reader", result.errors[0])
+        self.assertIn("join-gated", result.errors[0])

@@ -1,0 +1,39 @@
+name: scout-nightly
+
+# Reads the accounts members declared themselves and stores the interest tags
+# they imply, so nobody has to run the scout by hand.
+#
+# Setup (once):
+#   Settings → Secrets and variables → Actions
+#     variable TANDEM_API            = https://api.example.com
+#     secret   TANDEM_SERVICE_TOKEN  = the same value as the API's env var
+#
+# With no TANDEM_API the job exits 0 and does nothing, so a fork is quiet.
+
+on:
+  schedule:
+    - cron: "0 5 * * *" # 05:00 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  enrich:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Read declared handles
+        env:
+          TANDEM_API: ${{ vars.TANDEM_API }}
+          TANDEM_SERVICE_TOKEN: ${{ secrets.TANDEM_SERVICE_TOKEN }}
+        run: |
+          if [ -z "${TANDEM_API}" ]; then
+            echo "::notice::TANDEM_API is not set; nothing to enrich."
+            exit 0
+          fi
+          cd services/scout
+          python -m tandem_scout --members --api "${TANDEM_API}"

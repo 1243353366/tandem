@@ -96,7 +96,7 @@ git clone <this repo> tandem && cd tandem
 
 make demo     # end-to-end on throwaway ports: seed, match, scout, tear down
 make dev      # api :8080, matcher :8081, web :5173
-make test     # all three suites (161 tests)
+make test     # all three suites (171 tests)
 ```
 
 `make demo` is the fastest way to see it move. It boots both services on spare
@@ -271,6 +271,21 @@ one actually exposes, and the invitation script.
 
 ---
 
+## Automation
+
+Adding a handle is manual, because consent cannot be delegated. Everything after it
+runs nightly: the scout reads each consenting member's own accounts and stores the
+interest tags they imply. See [`docs/automation.md`](docs/automation.md) for the
+job, the two repository settings it needs, and the honest table of which networks
+can be read at all (Snapchat cannot, and the reason is written down rather than
+worked around).
+
+```bash
+make handle-add NETWORK=github HANDLE=you   # the consent step, done by you
+make members                                # what the nightly job runs
+make handles                                # what you have declared
+```
+
 ## Tests
 
 ```bash
@@ -281,8 +296,8 @@ make test-fast   # api + matcher
 | suite | count | covers |
 | --- | --- | --- |
 | `services/matcher/test` | 36 | scoring, vocabulary, caps, ranking, malformed input |
-| `services/api/test` | 59 | consent flow, OTP replay/rate limits, receipts, proofs, policy, erasure |
-| `services/scout/test` | 66 | adapters, PII scrubbing, queue rules, opt-out, public/private surfaces, end-to-end replay |
+| `services/api/test` | 62 | consent flow, OTP replay/rate limits, receipts, proofs, policy, erasure |
+| `services/scout/test` | 73 | adapters, PII scrubbing, queue rules, opt-out, public/private surfaces, end-to-end replay |
 
 No network in any of them. `scripts/demo.sh` is the integration test, and CI runs
 both.

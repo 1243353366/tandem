@@ -155,11 +155,106 @@ def _bluesky(handle: str, http: HttpGet) -> tuple[list[str], list[str]]:
     return texts, urls
 
 
+def _plain(raw: str) -> str:
+    """Reduce an API's HTML payload to words. Tags carry no interest signal."""
+    import html as html_mod
+    import re as re_mod
+
+    text = re_mod.sub(r"<[^>]+>", " ", raw or "")
+    return re_mod.sub(r"\s+", " ", html_mod.unescape(text)).strip()
+
+
+def _mastodon(handle: str, http: HttpGet) -> tuple[list[str], list[str]]:
+    user, _, host = handle.partition("@")
+    account = http(f"https://{host}/api/v1/accounts/lookup?acct={urllib.parse.quote(user)}")
+    account_id = account.get("id")
+    if not account_id:
+        return [], []
+    statuses = http(
+        f"https://{host}/api/v1/accounts/{account_id}/statuses"
+        f"?limit={MAX_ITEMS}&exclude_replies=true&exclude_reblogs=true"
+    )
+    texts, urls = [], []
+    for status in statuses[:MAX_ITEMS]:
+        texts.append(_plain(status.get("content", "")))
+        if status.get("url"):
+            urls.append(status["url"])
+    return texts, urls
+
+
+def _reddit(handle: str, http: HttpGet) -> tuple[list[str], list[str]]:
+    payload = http(
+        f"https://www.reddit.com/user/{urllib.parse.quote(handle)}/submitted.json?limit={MAX_ITEMS}"
+    )
+    children = ((payload or {}).get("data") or {}).get("children") or []
+    texts, urls = [], []
+    for child in children[:MAX_ITEMS]:
+        data = child.get("data") or {}
+        texts.append(
+            " ".join(
+                part for part in (data.get("title"), data.get("link_flair_text"), data.get("selftext", "")[:400]) if part
+            )
+        )
+        if data.get("permalink"):
+            urls.append("https://www.reddit.com" + data["permalink"])
+    return texts, urls
+
+
+def _gitlab(handle: str, http: HttpGet) -> tuple[list[str], list[str]]:
+    users = http(f"https://gitlab.com/api/v4/users?username={urllib.parse.quote(handle)}")
+    if not users:
+        return [], []
+    user_id = users[0].get("id")
+    projects = http(
+        f"https://gitlab.com/api/v4/users/{user_id}/projects"
+        f"?per_page={MAX_ITEMS}&order_by=last_activity_at"
+    )
+    texts, urls = [], []
+    for project in projects[:MAX_ITEMS]:
+        topics = " ".join(project.get("topics") or [])
+        texts.append(" ".join(part for part in (project.get("name"), project.get("description"), topics) if part))
+        if project.get("web_url"):
+            urls.append(project["web_url"])
+    return texts, urls
+
+
+def _codeberg(handle: str, http: HttpGet) -> tuple[list[str], list[str]]:
+    repos = http(f"https://codeberg.org/api/v1/users/{urllib.parse.quote(handle)}/repos?limit={MAX_ITEMS}")
+    texts, urls = [], []
+    for repo in repos[:MAX_ITEMS]:
+        if repo.get("fork"):
+            continue
+        texts.append(
+            " ".join(part for part in (repo.get("name"), repo.get("description"), repo.get("language")) if part)
+        )
+        if repo.get("html_url"):
+            urls.append(repo["html_url"])
+    return texts, urls
+
+
+def _stackoverflow(handle: str, http: HttpGet) -> tuple[list[str], list[str]]:
+    payload = http(
+        f"https://api.stackexchange.com/2.3/users/{urllib.parse.quote(handle)}/answers"
+        f"?site=stackoverflow&pagesize={MAX_ITEMS}&filter=withbody"
+    )
+    texts, urls = [], []
+    for item in (payload or {}).get("items", [])[:MAX_ITEMS]:
+        texts.append(_plain(item.get("body", "")))
+        if item.get("link"):
+            urls.append(item["link"])
+    return texts, urls
+
+
 ADAPTERS = {
     "github": _github,
     "hackernews": _hackernews,
     "devto": _devto,
     "bluesky": _bluesky,
+    "mastodon": _mastodon,
+    "reddit": _reddit,
+    "gitlab": _gitlab,
+    "codeberg": _codeberg,
+    "stackoverflow": _stackoverflow,
 }
 
 #: Networks a member can declare today, and whether we can read them yet. The
@@ -182,7 +277,10 @@ def enrich_member(
 
     adapter = ADAPTERS.get(member.network)
     if adapter is None:
-        result.errors.append(f"{member.network}: no reader for this network yet")
+        result.errors.append(
+            f"{member.network}: no public reader (declared only: Snapchat groups are "
+            "join-gated; see HANDLE_NETWORKS for the reason per network)"
+        )
         return result
 
     try:

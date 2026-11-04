@@ -37,6 +37,7 @@ export type HandleView = {
   method: "self_declared" | "proof_post" | "oauth";
   verified: boolean;
   readable: boolean;
+  why_not_readable: string | null;
   consent_id: string | null;
   evidence_url: string | null;
   created_at: string;
@@ -44,13 +45,12 @@ export type HandleView = {
 
 export type NetworkMeta = {
   label: string;
-  /** Handles are constrained per network so they cannot reshape a reader's URL. */
   pattern: RegExp;
-  /** Lowercased on the way in; some networks are case-sensitive in URLs. */
   lower: boolean;
-  /** Whether the scout can actually read this network today. */
   readable: boolean;
   reader: string | null;
+  /** Why a declared handle cannot be read. Said out loud rather than left blank. */
+  reason?: string;
 };
 
 export const HANDLE_NETWORKS: Record<string, NetworkMeta> = {
@@ -58,12 +58,89 @@ export const HANDLE_NETWORKS: Record<string, NetworkMeta> = {
   hackernews: { label: "Hacker News", pattern: /^[A-Za-z0-9_-]{2,15}$/, lower: false, readable: true, reader: "comments" },
   devto: { label: "DEV Community", pattern: /^[A-Za-z0-9_]{2,30}$/, lower: true, readable: true, reader: "articles" },
   bluesky: { label: "Bluesky", pattern: /^[A-Za-z0-9.-]{3,253}$/, lower: true, readable: true, reader: "posts" },
-  gitlab: { label: "GitLab", pattern: /^[A-Za-z0-9._-]{2,255}$/, lower: false, readable: false, reader: null },
-  mastodon: { label: "Mastodon", pattern: /^[A-Za-z0-9._-]{2,64}@[A-Za-z0-9.-]{3,253}$/, lower: true, readable: false, reader: null },
-  telegram: { label: "Telegram", pattern: /^[A-Za-z0-9_]{4,64}$/, lower: false, readable: false, reader: null },
-  reddit: { label: "Reddit", pattern: /^[A-Za-z0-9_-]{3,20}$/, lower: false, readable: false, reader: null },
-  discord: { label: "Discord", pattern: /^[A-Za-z0-9._]{2,32}$/, lower: true, readable: false, reader: null },
-  personal_site: { label: "Personal site", pattern: /^[A-Za-z0-9.-]{3,253}$/, lower: true, readable: false, reader: null },
+  mastodon: { label: "Mastodon", pattern: /^[A-Za-z0-9._-]{2,64}@[A-Za-z0-9.-]{3,253}$/, lower: true, readable: true, reader: "statuses" },
+  reddit: { label: "Reddit", pattern: /^[A-Za-z0-9_-]{3,20}$/, lower: false, readable: true, reader: "submitted" },
+  gitlab: { label: "GitLab", pattern: /^[A-Za-z0-9._-]{2,255}$/, lower: false, readable: true, reader: "projects" },
+  codeberg: { label: "Codeberg", pattern: /^[A-Za-z0-9][A-Za-z0-9._-]{1,38}$/, lower: false, readable: true, reader: "repos" },
+  stackoverflow: { label: "Stack Overflow (numeric user id)", pattern: /^[0-9]{1,12}$/, lower: false, readable: true, reader: "answers" },
+  personal_site: { label: "Personal site", pattern: /^[A-Za-z0-9.-]{3,253}$/, lower: true, readable: true, reader: "feed" },
+  // Declared, but not readable. Kept in the table so a person can still put the
+  // account on their profile and be matched on it; the API says why it is dark.
+  snapchat: {
+    label: "Snapchat",
+    pattern: /^[A-Za-z0-9._-]{3,30}$/,
+    lower: true,
+    readable: false,
+    reader: null,
+    reason:
+      "Snapchat publishes no API for profile or group content, and its groups are " +
+      "join-gated rather than public. Reading one would mean reading a closed space, " +
+      "so a declared Snapchat handle is shown and matched on, never read.",
+  },
+  instagram: {
+    label: "Instagram",
+    pattern: /^[A-Za-z0-9._]{1,30}$/,
+    lower: true,
+    readable: false,
+    reader: null,
+    reason: "Instagram serves profile content only to an authenticated session. Declared, not read.",
+  },
+  facebook: {
+    label: "Facebook",
+    pattern: /^[A-Za-z0-9.]{5,50}$/,
+    lower: true,
+    readable: false,
+    reader: null,
+    reason:
+      "Facebook gates profile and group content behind login, and groups are closed or " +
+      "invite-only. Declared, not read.",
+  },
+  threads: {
+    label: "Threads",
+    pattern: /^[A-Za-z0-9._]{1,30}$/,
+    lower: true,
+    readable: false,
+    reader: null,
+    reason: "Threads requires an authenticated app token per reader. Declared, not read.",
+  },
+  linkedin: {
+    label: "LinkedIn",
+    pattern: /^[A-Za-z0-9-]{3,100}$/,
+    lower: true,
+    readable: false,
+    reader: null,
+    reason:
+      "LinkedIn forbids third-party reading of profile content without a partner " +
+      "agreement. Declared, not read.",
+  },
+  telegram: {
+    label: "Telegram",
+    pattern: /^[A-Za-z0-9_]{4,64}$/,
+    lower: false,
+    readable: false,
+    reader: null,
+    reason:
+      "Telegram has no API for reading a person's messages; channels are readable as a " +
+      "publisher page, which is a different thing from a personal handle. Declared, not read.",
+  },
+  discord: {
+    label: "Discord",
+    pattern: /^[A-Za-z0-9._]{2,32}$/,
+    lower: true,
+    readable: false,
+    reader: null,
+    reason:
+      "Discord content lives in servers you must join, and joining is not public " +
+      "availability. Declared, not read.",
+  },
+  youtube: {
+    label: "YouTube",
+    pattern: /^[A-Za-z0-9._-]{3,30}$/,
+    lower: true,
+    readable: false,
+    reader: null,
+    reason: "YouTube reading needs a project API key per deployment. Declared, not read.",
+  },
 };
 
 /** Scopes a declared handle can carry. Deliberately short. */
@@ -103,6 +180,7 @@ export function handleView(row: Record<string, unknown>): HandleView {
     method: String(row.method) as HandleView["method"],
     verified: Boolean(row.verified),
     readable: Boolean(meta?.readable),
+    why_not_readable: meta?.reason ?? null,
     consent_id: row.consent_id ? String(row.consent_id) : null,
     evidence_url: row.evidence_url ? String(row.evidence_url) : null,
     created_at: String(row.created_at),

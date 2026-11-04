@@ -657,9 +657,62 @@ describe("self-declared handles", () => {
     assert.equal(meta.status, 200);
     const github = meta.json.networks.find((n: any) => n.network === "github");
     assert.equal(github.readable, true);
+    const snapchat = meta.json.networks.find((n: any) => n.network === "snapchat");
+    assert.equal(snapchat.readable, false, "declared, but there is nothing public to read");
+    assert.match(snapchat.reason, /join-gated|no API/);
     const mastodon = meta.json.networks.find((n: any) => n.network === "mastodon");
-    assert.equal(mastodon.readable, false, "declared but not readable yet, and we say so");
+    assert.equal(mastodon.readable, true, "mastodon exposes a documented public API");
+    assert.equal(github.reason, null, "readable networks carry no excuse");
     assert.doesNotMatch(JSON.stringify(meta.json), /metadata-probe/);
+  });
+
+  it("lets someone declare an account we cannot read, and says why", async () => {
+    const { token } = await signup({ display_name: "snapper" });
+    const created = await harness.api("POST", "/v1/handles", {
+      token,
+      body: { network: "snapchat", handle: "Snap.Dev" },
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.json.handle.handle, "snap.dev", "snapchat handles are lowercased");
+    assert.equal(created.json.handle.readable, false);
+    assert.match(created.json.handle.why_not_readable, /join-gated/);
+
+    // it still scopes a consent, so the person sees exactly what was agreed to
+    const consents = await harness.api("GET", "/v1/consent", { token });
+    assert.ok(consents.json.consents.some((c: any) => c.id === created.json.handle.consent_id));
+  });
+
+  it("accepts the wider set of networks with their own shapes", async () => {
+    const cases: Array<[string, string]> = [
+      ["mastodon", "Anyone@Hachyderm.IO"],
+      ["reddit", "quiet_builder"],
+      ["gitlab", "someone.name"],
+      ["codeberg", "patch-worker"],
+      ["stackoverflow", "1234567"],
+      ["facebook", "someone.builds"],
+      ["linkedin", "someone-builds"],
+      ["discord", "someone.builds"],
+    ];
+    for (const [network, handle] of cases) {
+      const { token } = await signup({ display_name: `net ${network}` });
+      const created = await harness.api("POST", "/v1/handles", { token, body: { network, handle } });
+      assert.equal(created.status, 201, `${network}: ${JSON.stringify(created.json)}`);
+    }
+  });
+
+  it("refuses handles that do not fit the network they claim", async () => {
+    const { token } = await signup({ display_name: "fits" });
+    const cases: Array<[string, string]> = [
+      ["stackoverflow", "not-a-number"],
+      ["mastodon", "no-instance"],
+      ["facebook", "ab"],
+      ["reddit", "a"],
+      ["codeberg", "-leading-dash"],
+    ];
+    for (const [network, handle] of cases) {
+      const response = await harness.api("POST", "/v1/handles", { token, body: { network, handle } });
+      assert.equal(response.status, 400, `${network} accepted ${handle}`);
+    }
   });
 
   it("erasing a person erases their handles", async () => {

@@ -27,6 +27,9 @@ help:
 	@echo "  make doctor       check that a running deployment is healthy"
 	@echo "  make scout        discovery run against recorded data (no network)"
 	@echo "  make scout-live   discovery run against public endpoints"
+	@echo "  make handles      list the accounts you declared"
+	@echo "  make handle-add   NETWORK=github HANDLE=you  add one (the consent step)"
+	@echo "  make members      read every consenting member's declared handles"
 	@echo "  make web          serve the intake page on :5173"
 	@echo "  make clean        remove local runtime data"
 	@echo
@@ -81,6 +84,18 @@ scout:
 .PHONY: scout-live
 scout-live:
 	@cd $(SCOUT_DIR) && $(PY) -m tandem_scout --live --topics ai,security
+
+.PHONY: handles
+handles:
+	@./scripts/add-handle.sh list
+
+.PHONY: handle-add
+handle-add:
+	@./scripts/add-handle.sh add $(NETWORK) $(HANDLE)
+
+.PHONY: members
+members:
+	@cd $(SCOUT_DIR) && $(PY) -m tandem_scout --members --api $${TANDEM_API:-http://127.0.0.1:8080}
 
 .PHONY: web
 web:

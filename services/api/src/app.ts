@@ -378,6 +378,7 @@ const ROUTES: Route[] = [
           label: meta.label,
           readable: meta.readable,
           reader: meta.reader,
+          reason: meta.reason ?? null,
         })),
         note:
           "A handle is declared by its owner, never discovered. A readable network " +
