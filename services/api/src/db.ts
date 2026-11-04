@@ -140,6 +140,20 @@ const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS declared_handles_consent ON declared_handles (consent_id)`,
   `CREATE INDEX IF NOT EXISTS declared_handles_person ON declared_handles (person_id, network)`,
+  `CREATE TABLE IF NOT EXISTS intros (
+     id TEXT PRIMARY KEY,
+     a_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+     b_id TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+     thread_url TEXT NOT NULL,
+     thread_host TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','accepted','declined')),
+     proposed_by TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+     proposed_at TEXT NOT NULL,
+     responded_at TEXT
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS intros_pair ON intros (a_id, b_id)`,
+  `CREATE INDEX IF NOT EXISTS intros_status ON intros (status)`,
+
 ];
 
 export function openDb(path: string): Db {

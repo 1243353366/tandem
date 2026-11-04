@@ -46,6 +46,8 @@ import {
 } from "./store.ts";
 import type { PersonRow } from "./store.ts";
 import { startPhoneConsent, verifyPhoneConsent } from "./consent.ts";
+import { createIntro, introView, listIntrosFor, respondToIntro } from "./intros.ts";
+import { matchQuota } from "./quota.ts";
 import {
   NETWORKS,
   exchangeOAuthCode,
@@ -184,6 +186,107 @@ function requireService(ctx: Ctx, req: ApiRequest): void {
 }
 
 const ROUTES: Route[] = [
+  // -- quota ---------------------------------------------------------------
+  {
+    method: "GET",
+    pattern: /^\/v1\/quota$/,
+    handler: (ctx, req, res) => {
+      const person = requirePerson(ctx, req);
+      send(res, 200, matchQuota(ctx.db, person.id));
+    },
+  },
+
+  // -- introductions: public thread, or nothing ----------------------------
+  {
+    method: "GET",
+    pattern: /^\/v1\/intros$/,
+    handler: (ctx, req, res) => {
+      const person = requirePerson(ctx, req);
+      send(res, 200, {
+        intros: listIntrosFor(ctx.db, person.id).map((row) => introView(row, person.id)),
+        note: "An introduction is a public thread you both can see. There are no messages here.",
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/v1\/intros$/,
+    handler: (ctx, req, res) => {
+      const person = requirePerson(ctx, req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const peerId = String(body.peer_id ?? "").trim();
+      if (!peerId) throw badRequest("peer_id is required.", [{ field: "peer_id", message: "required" }]);
+      const row = createIntro(ctx.db, { proposerId: person.id, peerId, threadUrl: body.thread_url });
+      send(res, 201, { intro: introView(row, person.id) });
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/v1\/intros\/respond$/,
+    handler: (ctx, req, res) => {
+      const person = requirePerson(ctx, req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const introId = String(body.intro_id ?? "").trim();
+      if (!introId) throw badRequest("intro_id is required.", [{ field: "intro_id", message: "required" }]);
+      const row = respondToIntro(ctx.db, { introId, personId: person.id, accept: body.accept === true });
+      send(res, 200, {
+        intro: introView(row, person.id),
+        note:
+          row.status === "accepted"
+            ? "Both of you can see the thread now."
+            : "Declined. The other side is not told, and nothing is opened up.",
+      });
+    },
+  },
+  // Direct messages are not a missing feature; they are a refusal.
+  {
+    method: "POST",
+    pattern: /^(\/v1\/(dm|dms|messages)|\/v1\/intros\/[A-Za-z0-9_-]+\/message)$/,
+    handler: (_ctx, _req, res) => {
+      send(res, 403, {
+        error: "refused",
+        message:
+          "Tandem has no direct messages. Introductions happen in a public thread the person " +
+          "chose, so nothing here can be used to reach someone in private.",
+        see: "POST /v1/intros with a public thread URL",
+      });
+    },
+  },
+
+  // -- operator: one digest ------------------------------------------------
+  {
+    method: "GET",
+    pattern: /^\/v1\/service\/cohort$/,
+    handler: (ctx, req, res) => {
+      requireService(ctx, req);
+      const one = (sql: string, ...args: unknown[]) =>
+        Number((ctx.db.prepare(sql).get(...args) as { n?: number } | undefined)?.n ?? 0);
+      const since = new Date(Date.now() - 14 * 86_400_000).toISOString();
+      send(res, 200, {
+        generated_at: new Date().toISOString(),
+        people: one("SELECT COUNT(*) AS n FROM people"),
+        verified: one("SELECT COUNT(DISTINCT person_id) AS n FROM consents WHERE revoked_at IS NULL"),
+        waiting_to_verify: one(
+          "SELECT COUNT(*) AS n FROM people WHERE id NOT IN (SELECT person_id FROM consents WHERE revoked_at IS NULL)",
+        ),
+        matches_last_14d: one("SELECT COUNT(*) AS n FROM matches WHERE created_at >= ?", since),
+        intros: {
+          proposed: one("SELECT COUNT(*) AS n FROM intros WHERE status = 'proposed'"),
+          accepted: one("SELECT COUNT(*) AS n FROM intros WHERE status = 'accepted'"),
+          declined: one("SELECT COUNT(*) AS n FROM intros WHERE status = 'declined'"),
+        },
+        revoked_consents: one("SELECT COUNT(*) AS n FROM consents WHERE revoked_at IS NOT NULL"),
+        signals: one("SELECT COUNT(*) AS n FROM signals"),
+        declared_handles: one("SELECT COUNT(*) AS n FROM declared_handles"),
+        cap_per_person: 2,
+        cap_window_days: 14,
+        the_number_that_matters:
+          "intros.accepted, then whether those pairs are still talking in two weeks. " +
+          "Nothing else here decides the cohort.",
+      });
+    },
+  },
+
   {
     method: "GET",
     pattern: /^\/healthz$/,
@@ -569,7 +672,17 @@ const ROUTES: Route[] = [
       }
 
       const body = (req.body ?? {}) as Record<string, unknown>;
-      const limit = Number.isFinite(Number(body.limit)) ? Number(body.limit) : 10;
+      // Two a fortnight, enforced here. This is product logic, not etiquette.
+      const quota = matchQuota(ctx.db, person.id);
+      if (quota.remaining === 0) {
+        throw forbidden(
+          `You have had ${quota.used} introductions in the last ${quota.window_days} days, which is the cap. ` +
+            "Two a fortnight is deliberate: a list of ten people is not an introduction. " +
+            `A slot frees up at ${quota.frees_up_at ?? "the end of the window"}.`,
+        );
+      }
+      const requested = Number.isFinite(Number(body.limit)) ? Number(body.limit) : quota.remaining;
+      const limit = Math.max(1, Math.min(requested, quota.remaining));
 
       const candidates = listSearchable(ctx.db)
         .filter((row) => row.id !== person.id)
@@ -589,7 +702,7 @@ const ROUTES: Route[] = [
       );
 
       const byId = new Map(candidates.map((entry) => [entry.row.id, entry]));
-      const enriched = result.matches.map((match) => {
+      const enriched = result.matches.slice(0, limit).map((match) => {
         const entry = byId.get(match.person_id);
         if (entry) {
           recordMatch(ctx.db, {

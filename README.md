@@ -96,7 +96,7 @@ git clone <this repo> tandem && cd tandem
 
 make demo     # end-to-end on throwaway ports: seed, match, scout, tear down
 make dev      # api :8080, matcher :8081, web :5173
-make test     # all three suites (171 tests)
+make test     # all three suites (180 tests)
 ```
 
 `make demo` is the fastest way to see it move. It boots both services on spare
@@ -207,6 +207,26 @@ mentor/mentee complement and the reciprocity matrix, are in
 
 ---
 
+## Two matches a fortnight, and introductions in public
+
+Matching is capped at **two introductions per person per 14 days**, enforced in
+`services/api/src/quota.ts` and re-checked in the route, so a matcher that
+over-returns cannot exceed it. `GET /v1/quota` states where a person stands and when
+a slot frees up. Scarcity is the product decision: a list of ten people is not an
+introduction.
+
+An introduction is a **public thread the person chose**:
+
+```bash
+POST /v1/intros   { "peer_id": "...", "thread_url": "https://github.com/org/repo/issues/1" }
+POST /v1/intros/respond { "intro_id": "...", "accept": true }
+```
+
+Both sides see the thread only after the second person accepts, and a declined
+introduction shows them nothing. `POST /v1/dm`, `/v1/messages` and any `/message`
+path return 403: direct messages are not a missing feature here, they are a refusal.
+`GET /v1/intros` is the whole inbox, because there is nothing to read in private.
+
 ## Consent model in one screen
 
 ```
@@ -296,7 +316,7 @@ make test-fast   # api + matcher
 | suite | count | covers |
 | --- | --- | --- |
 | `services/matcher/test` | 36 | scoring, vocabulary, caps, ranking, malformed input |
-| `services/api/test` | 62 | consent flow, OTP replay/rate limits, receipts, proofs, policy, erasure |
+| `services/api/test` | 71 | consent flow, OTP replay/rate limits, receipts, proofs, policy, erasure |
 | `services/scout/test` | 73 | adapters, PII scrubbing, queue rules, opt-out, public/private surfaces, end-to-end replay |
 
 No network in any of them. `scripts/demo.sh` is the integration test, and CI runs

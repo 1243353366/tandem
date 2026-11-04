@@ -19,6 +19,7 @@ import hmac
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -270,6 +271,46 @@ def cmd_export(args) -> int:
     return 0
 
 
+def cmd_digest(args) -> int:
+    """One cohort, one page. No dashboard, no charts, no vanity metrics."""
+    client = Client(args.base)
+    cohort = client.must("GET", "/v1/service/cohort", token=args.service_token)
+
+    def line(label: str, value) -> None:
+        print(f"  {label:<26} {value}")
+
+    print(colour("tandem cohort digest", BOLD))
+    print(f"  generated {cohort['generated_at']}")
+    print()
+    line("people", cohort["people"])
+    line("verified", cohort["verified"])
+    line("waiting to verify", colour(str(cohort["waiting_to_verify"]), YELLOW if cohort["waiting_to_verify"] else None))
+    line("matches (last 14 days)", cohort["matches_last_14d"])
+    intros = cohort["intros"]
+    line("intros proposed", intros["proposed"])
+    line("intros accepted", colour(str(intros["accepted"]), GREEN if intros["accepted"] else YELLOW))
+    line("intros declined", intros["declined"])
+    line("revoked consents", cohort["revoked_consents"])
+    line("interest signals", cohort["signals"])
+    line("declared handles", cohort["declared_handles"])
+    print()
+    print(f"  cap: {cohort['cap_per_person']} per person per {cohort['cap_window_days']} days")
+    print(f"  {cohort['the_number_that_matters']}")
+    return 0
+
+
+def cmd_erase(args) -> int:
+    """Erase one person, the way they asked. Prints what it took."""
+    client = Client(args.base)
+    started = time.time()
+    client.must("DELETE", f"/v1/people/{args.person_id}", token=args.token)
+    elapsed = time.time() - started
+    print(f"{colour('erased', GREEN)} {args.person_id} in {elapsed:.2f}s")
+    print("  profile scrubbed, consents deleted, signals and matches removed,")
+    print("  introductions dropped. Their token no longer resolves.")
+    return 0
+
+
 # -------------------------------------------------------------------- main ----
 
 def main(argv: list[str]) -> int:
@@ -296,6 +337,15 @@ def main(argv: list[str]) -> int:
     export.add_argument("token")
     export.add_argument("--out")
     export.set_defaults(func=cmd_export)
+
+    digest = subs.add_parser("digest", help="one cohort digest (operator)")
+    digest.add_argument("--service-token", default=os.environ.get("TANDEM_SERVICE_TOKEN", ""))
+    digest.set_defaults(func=cmd_digest)
+
+    erase = subs.add_parser("erase", help="erase one person (their token required)")
+    erase.add_argument("person_id")
+    erase.add_argument("--token", required=True, help="that person's own token")
+    erase.set_defaults(func=cmd_erase)
 
     args = parser.parse_args(argv)
     return args.func(args)

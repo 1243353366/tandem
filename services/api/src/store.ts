@@ -197,6 +197,10 @@ export function erasePerson(db: Db, id: string): void {
   db.prepare("DELETE FROM consents WHERE person_id = ?").run(id);
   db.prepare("DELETE FROM phone_challenges WHERE person_id = ?").run(id);
   db.prepare("DELETE FROM matches WHERE a_id = ? OR b_id = ?").run(id, id);
+  // Introductions and declared handles point at the person, so they go too.
+  // Leaving either behind would leave a public thread URL naming someone who left.
+  db.prepare("DELETE FROM intros WHERE a_id = ? OR b_id = ? OR proposed_by = ?").run(id, id, id);
+  db.prepare("DELETE FROM declared_handles WHERE person_id = ?").run(id);
   audit(db, id, "person.erased", null, {});
 }
 
