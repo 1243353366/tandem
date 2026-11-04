@@ -518,3 +518,157 @@ describe("privacy surface", () => {
     assert.ok([400, 413].includes(response.status), `got ${response.status}`);
   });
 });
+
+// -------------------------------------------------- self-declared handles ----
+//
+// The claim being defended: a handle is something a person types about
+// themselves, which we may then read on their behalf. It is not a lookup key.
+
+describe("self-declared handles", () => {
+  async function personWithHandle(network = "github", handle = "octocat") {
+    const account = await signup({ display_name: `H ${Math.random().toString(36).slice(2, 7)}` });
+    const created = await harness.api("POST", "/v1/handles", {
+      token: account.token,
+      body: { network, handle },
+    });
+    return { ...account, created };
+  }
+
+  it("records a handle the person typed, with a consent for it", async () => {
+    const { token, created } = await personWithHandle();
+    assert.equal(created.status, 201);
+    assert.equal(created.json.handle.handle, "octocat");
+    assert.equal(created.json.handle.network, "github");
+    assert.equal(created.json.handle.method, "self_declared");
+    assert.equal(created.json.handle.verified, false);
+    assert.equal(created.json.handle.readable, true);
+    assert.ok(created.json.handle.consent_id, "reading it needs a consent row");
+
+    const consents = await harness.api("GET", "/v1/consent", { token });
+    const scoped = consents.json.consents.find((c: any) => c.id === created.json.handle.consent_id);
+    assert.deepEqual(scoped.scope, ["signal.enrich"]);
+  });
+
+  it("normalizes the handle instead of trusting it", async () => {
+    const { token } = await signup({ display_name: "norm" });
+    const created = await harness.api("POST", "/v1/handles", {
+      token,
+      body: { network: "devto", handle: "@InesBuilds" },
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.json.handle.handle, "inesbuilds", "dev handles are lowercased");
+  });
+
+  it("refuses anything that is not shaped like a handle on that network", async () => {
+    const { token } = await signup({ display_name: "shapes" });
+    for (const body of [
+      { network: "github", handle: "../etc/passwd" },
+      { network: "github", handle: "a b" },
+      { network: "github", handle: "" },
+      { network: "myspace", handle: "tom" },
+    ]) {
+      const response = await harness.api("POST", "/v1/handles", { token, body });
+      assert.equal(response.status, 400, JSON.stringify(body));
+    }
+  });
+
+  it("will not let two accounts claim the same account", async () => {
+    const first = await personWithHandle("hackernews", "pg");
+    assert.equal(first.created.status, 201);
+    const second = await signup({ display_name: "copycat" });
+    const conflictResponse = await harness.api("POST", "/v1/handles", {
+      token: second.token,
+      body: { network: "hackernews", handle: "pg" },
+    });
+    assert.equal(conflictResponse.status, 409);
+    assert.match(conflictResponse.json.message, /already linked/);
+  });
+
+  it("is idempotent for the same person and the same handle", async () => {
+    const { token } = await signup({ display_name: "twice" });
+    const one = await harness.api("POST", "/v1/handles", { token, body: { network: "github", handle: "twice" } });
+    const two = await harness.api("POST", "/v1/handles", { token, body: { network: "github", handle: "twice" } });
+    assert.equal(one.json.handle.id, two.json.handle.id);
+  });
+
+  it("lists only your own handles", async () => {
+    const { token } = await personWithHandle("bluesky", "someone.bsky.social");
+    const mine = await harness.api("GET", "/v1/me/handles", { token });
+    assert.equal(mine.status, 200);
+    assert.equal(mine.json.handles.length, 1);
+    assert.equal(mine.json.handles[0].network, "bluesky");
+  });
+
+  it("tells the scout which members consented, never who owns a handle", async () => {
+    const { id, token } = await personWithHandle("devto", "scoutable");
+    const service = await harness.api("GET", "/v1/service/members");
+    assert.equal(service.status, 200);
+    const entry = service.json.members.find((member: any) => member.person_id === id);
+    assert.ok(entry, "a consenting member should be listed for enrichment");
+    assert.deepEqual(entry.handles, [{ network: "devto", handle: "scoutable", verified: false }]);
+    assert.match(service.json.note, /typed by the person/);
+
+    // and there is no path from a handle back to a person
+    const lookup = await harness.api("GET", "/v1/service/members?handle=scoutable");
+    assert.equal(lookup.status, 200);
+    assert.deepEqual(lookup.json.members, service.json.members, "query params must not filter by handle");
+  });
+
+  it("stores derived interests and deletes them when the handle goes", async () => {
+    const { id, token, created } = await personWithHandle("github", "derived");
+    const applied = await harness.api("POST", `/v1/service/members/${id}/signals`, {
+      body: { interests: ["ai", "security"], observations: 12, sources: ["github"] },
+    });
+    assert.equal(applied.status, 200);
+    assert.deepEqual(applied.json.interests, ["ai", "security"]);
+
+    const stored = harness.db
+      .prepare("SELECT value, source FROM signals WHERE person_id = ? ORDER BY value")
+      .all(id) as Array<{ value: string; source: string }>;
+    assert.deepEqual(stored.map((row) => row.value), ["ai", "security"]);
+    assert.equal(stored[0].source, "handle:github");
+
+    const removed = await harness.api("DELETE", `/v1/handles/${created.json.handle.id}`, { token });
+    assert.equal(removed.status, 200);
+    const after = harness.db.prepare("SELECT COUNT(*) AS n FROM signals WHERE person_id = ?").get(id) as { n: number };
+    assert.equal(after.n, 0, "a removed handle takes its derived signals with it");
+  });
+
+  it("refuses to derive signals without a live handle consent", async () => {
+    const stranger = await signup({ display_name: "no handles" });
+    const response = await harness.api("POST", `/v1/service/members/${stranger.id}/signals`, {
+      body: { interests: ["ai"] },
+    });
+    assert.equal(response.status, 409);
+    assert.match(response.json.message, /no live handle consent/);
+  });
+
+  it("ignores injected junk in a signal payload", async () => {
+    const { id } = await personWithHandle("github", "junk");
+    const response = await harness.api("POST", `/v1/service/members/${id}/signals`, {
+      body: { interests: ["ai", "<script>", "a".repeat(80), "security"], observations: 3 },
+    });
+    assert.deepEqual(response.json.interests, ["ai", "security"]);
+  });
+
+  it("publishes network metadata without exposing anyone's handle", async () => {
+    await personWithHandle("github", "metadata-probe");
+    const meta = await harness.api("GET", "/v1/handles/networks");
+    assert.equal(meta.status, 200);
+    const github = meta.json.networks.find((n: any) => n.network === "github");
+    assert.equal(github.readable, true);
+    const mastodon = meta.json.networks.find((n: any) => n.network === "mastodon");
+    assert.equal(mastodon.readable, false, "declared but not readable yet, and we say so");
+    assert.doesNotMatch(JSON.stringify(meta.json), /metadata-probe/);
+  });
+
+  it("erasing a person erases their handles", async () => {
+    const { id, token } = await personWithHandle("github", "erase-me");
+    const erased = await harness.api("DELETE", `/v1/people/${id}`, { token });
+    assert.equal(erased.status, 200);
+    const rows = harness.db.prepare("SELECT COUNT(*) AS n FROM declared_handles WHERE person_id = ?").get(id) as {
+      n: number;
+    };
+    assert.equal(rows.n, 0);
+  });
+});

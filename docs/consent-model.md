@@ -85,6 +85,45 @@ Scopes are additive and revocable individually. There is no "necessary for
 service" bundle, because the only truly necessary scope is `identity.verify` and
 even that can be revoked at the cost of being findable.
 
+## Self-declared handles: the consented path
+
+The scout can invite a stranger underneath a public post. It should not have to.
+The better path is the one where the person arrives first:
+
+```bash
+POST /v1/handles   { "network": "github", "handle": "octocat" }
+  → 201, a self_declared handle, plus a consent with scope ["signal.enrich"]
+```
+
+Three things follow from that row, and nothing else:
+
+1. we may read **that person's own** public output, on the networks they named
+2. the tags we derive are stored as `signals`, each citing that consent
+3. `DELETE /v1/handles/:id` revokes the consent and deletes the derived signals in
+   the same transaction
+
+What a self-declared handle is **not**: a lookup key. `GET /v1/service/members`
+answers "whose accounts may I read on their behalf" for the operator's scout, and
+no query anywhere in the API answers "who is this handle". Two accounts cannot
+claim the same account (one live consent per `(network, subject_hash)`), and the
+conflict is reported without revealing whose it is.
+
+### On the word "scraping"
+
+Adding a handle does not change what a platform allows, and this codebase does not
+pretend otherwise. Every reader in `services/scout/tandem_scout/members.py`:
+
+- uses the platform's **documented API**, not its HTML
+- reads **one page**, bounded by `MAX_ITEMS`, with no pagination crawling
+- sends a **real User-Agent** identifying the software
+- reads only the account the person declared, never a follower graph
+
+What the declared handle changes is who the reading is *about*. Reading a
+stranger's output to build a profile of them is the thing Tandem exists to avoid;
+reading your own account, at your request, under a scope you can revoke, is a
+feature of your profile. That distinction is the whole design, and it is why the
+consent row is created in the same transaction as the handle.
+
 ## The proof flows
 
 ### Phone (SMS one-time code)

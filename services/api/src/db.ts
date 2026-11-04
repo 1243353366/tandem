@@ -121,6 +121,25 @@ const SCHEMA = [
      detail TEXT NOT NULL DEFAULT '{}'
    )`,
   `CREATE INDEX IF NOT EXISTS audit_by_time ON audit_log (at DESC)`,
+  // Self-declared handles. A row here means "this person says this account is
+  // theirs, and consented to us reading it under signal.enrich". A handle is not
+  // a lookup key: nothing in this API resolves a handle to a person.
+  `CREATE TABLE IF NOT EXISTS declared_handles (
+     id           TEXT PRIMARY KEY,
+     person_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+     network      TEXT NOT NULL,
+     handle       TEXT NOT NULL,
+     method       TEXT NOT NULL DEFAULT 'self_declared'
+                  CHECK (method IN ('self_declared','proof_post','oauth')),
+     verified     INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0,1)),
+     consent_id   TEXT REFERENCES consents(id) ON DELETE CASCADE,
+     evidence_url TEXT,
+     created_at   TEXT NOT NULL,
+     updated_at   TEXT NOT NULL,
+     UNIQUE (person_id, network)
+   )`,
+  `CREATE INDEX IF NOT EXISTS declared_handles_consent ON declared_handles (consent_id)`,
+  `CREATE INDEX IF NOT EXISTS declared_handles_person ON declared_handles (person_id, network)`,
 ];
 
 export function openDb(path: string): Db {

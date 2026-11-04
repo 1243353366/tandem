@@ -55,6 +55,15 @@ import {
   verifyProofPost,
 } from "./social.ts";
 import type { FetchLike } from "./social.ts";
+import {
+  HANDLE_NETWORKS,
+  applyMemberSignals,
+  declareHandle,
+  listHandles,
+  observedInterests,
+  removeHandle,
+  serviceMembers,
+} from "./handles.ts";
 import { requestMatches } from "./matcher.ts";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -155,6 +164,24 @@ type Handler = (
 ) => Promise<void> | void;
 
 type Route = { method: string; pattern: RegExp; handler: Handler };
+
+/**
+ * Service-token guard for the two operator endpoints the scout uses.
+ *
+ * They answer "whose own accounts may I read on their behalf", never "who is this
+ * handle". Without TANDEM_SERVICE_TOKEN they do not exist outside dev mode, so a
+ * fork cannot accidentally publish a member directory.
+ */
+function requireService(ctx: Ctx, req: ApiRequest): void {
+  const expected = process.env.TANDEM_SERVICE_TOKEN ?? "";
+  if (!expected) {
+    if (ctx.config.dev) return;
+    throw notFound("Not found.");
+  }
+  if ((req.headers.authorization ?? "") !== `Bearer ${expected}`) {
+    throw unauthorized("A service token is required for this endpoint.");
+  }
+}
 
 const ROUTES: Route[] = [
   {
@@ -340,6 +367,80 @@ const ROUTES: Route[] = [
     },
   },
 
+  // -- handles: accounts the person declares themselves -------------------
+  {
+    method: "GET",
+    pattern: /^\/v1\/handles\/networks$/,
+    handler: (_ctx, _req, res) => {
+      send(res, 200, {
+        networks: Object.entries(HANDLE_NETWORKS).map(([network, meta]) => ({
+          network,
+          label: meta.label,
+          readable: meta.readable,
+          reader: meta.reader,
+        })),
+        note:
+          "A handle is declared by its owner, never discovered. A readable network " +
+          "contributes interest signals to that person's own matching.",
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/v1\/handles$/,
+    handler: (ctx, req, res) => {
+      const person = requirePerson(ctx, req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const view = declareHandle(
+        ctx.db,
+        ctx.config,
+        person.id,
+        String(body.network ?? ""),
+        String(body.handle ?? ""),
+      );
+      send(res, 201, { handle: view });
+    },
+  },
+  {
+    method: "GET",
+    pattern: /^\/v1\/me\/handles$/,
+    handler: (ctx, req, res) => {
+      const person = requirePerson(ctx, req);
+      send(res, 200, { handles: listHandles(ctx.db, person.id) });
+    },
+  },
+  {
+    method: "DELETE",
+    pattern: /^\/v1\/handles\/([A-Za-z0-9_:-]{3,140})$/,
+    handler: (ctx, req, res, params) => {
+      const person = requirePerson(ctx, req);
+      removeHandle(ctx.db, person.id, params[0]);
+      send(res, 200, { removed: true, handle_id: params[0] });
+    },
+  },
+  {
+    method: "GET",
+    pattern: /^\/v1\/service\/members$/,
+    handler: (ctx, req, res) => {
+      requireService(ctx, req);
+      send(res, 200, {
+        members: serviceMembers(ctx.db),
+        note:
+          "Members whose own declared handles we may read under their consent. Not a " +
+          "directory: every handle here was typed by the person it belongs to.",
+      });
+    },
+  },
+  {
+    method: "POST",
+    pattern: /^\/v1\/service\/members\/([0-9a-fA-F-]{36})\/signals$/,
+    handler: (ctx, req, res, params) => {
+      requireService(ctx, req);
+      const result = applyMemberSignals(ctx.db, params[0], (req.body ?? {}) as Record<string, unknown>);
+      send(res, 200, { person_id: params[0], ...result });
+    },
+  },
+
   // -- social -------------------------------------------------------------
   {
     method: "POST",
@@ -478,8 +579,10 @@ const ROUTES: Route[] = [
 
       const result = await requestMatches(
         ctx.config,
-        matcherPayload(person, mine),
-        candidates.map((entry) => matcherPayload(entry.row, entry.consents)),
+        matcherPayload(person, mine, observedInterests(ctx.db, person.id)),
+        candidates.map((entry) =>
+          matcherPayload(entry.row, entry.consents, observedInterests(ctx.db, entry.row.id)),
+        ),
         limit,
         ctx.fetcher as typeof fetch,
       );

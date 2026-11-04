@@ -566,3 +566,98 @@ class TestGroupSignalsAreNotLeads(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# ------------------------------------------------- self-declared handles ----
+
+class TestMemberEnrichment(unittest.TestCase):
+    """The consented path: read a person's own accounts, on their say-so."""
+
+    def _http(self, mapping):
+        def get(url: str):
+            for fragment, payload in mapping.items():
+                if fragment in url:
+                    return payload
+            raise AssertionError(f"unexpected url: {url}")
+        return get
+
+    def test_github_repos_become_interest_tags(self):
+        from tandem_scout import members
+        http = self._http({
+            "/repos": [
+                {"name": "evals", "description": "llm eval harness in python", "language": "Python",
+                 "topics": ["ai"], "html_url": "https://github.com/x/evals"},
+                {"name": "forked", "fork": True, "description": "ignore me"},
+            ]
+        })
+        result = members.enrich_member(members.MemberHandle("p1", "github", "x"), http)
+        self.assertIn("ai", result.interests)
+        self.assertEqual(result.observations, 1, "forks are skipped")
+        self.assertEqual(result.evidence_urls, ["https://github.com/x/evals"])
+
+    def test_hackernews_comments_are_read_for_the_declared_author(self):
+        from tandem_scout import members
+        captured = {}
+
+        def get(url):
+            captured["url"] = url
+            return {"hits": [{"comment_text": "threat modelling for agents", "objectID": "1"}]}
+
+        result = members.enrich_member(members.MemberHandle("p2", "hackernews", "pg"), get)
+        self.assertIn("author_pg", captured["url"], "we ask for that author, not a topic search")
+        self.assertEqual(result.observations, 1)
+        self.assertTrue(result.interests, "a comment about agents should produce at least one tag")
+
+    def test_declared_but_unreadable_networks_say_so(self):
+        from tandem_scout import members
+        result = members.enrich_member(members.MemberHandle("p3", "mastodon", "a@b.social"))
+        self.assertEqual(result.interests, [])
+        self.assertIn("no reader", result.errors[0])
+
+    def test_a_failing_platform_does_not_stop_the_others(self):
+        from tandem_scout import members
+
+        def get(url):
+            if "/repos" in url:
+                raise ValueError("github down")
+            return [{"title": "notes", "tag_list": ["security"], "url": "https://dev.to/x/1"}]
+
+        results = [
+            members.enrich_member(members.MemberHandle("p4", "github", "x"), get),
+            members.enrich_member(members.MemberHandle("p4", "devto", "x"), get),
+        ]
+        merged = members.merge_member_signals(results)["p4"]
+        self.assertIn("security", merged.interests)
+        self.assertTrue(merged.errors, "the failure is reported, not swallowed")
+
+    def test_two_networks_agreeing_rank_higher_than_one(self):
+        from tandem_scout import members
+        http = self._http({
+            "/repos": [{"name": "a", "description": "ai agents", "html_url": "https://github.com/x/a"}],
+            "/articles": [{"title": "ai evals", "tag_list": ["ai"], "url": "https://dev.to/x/1"}],
+            "getAuthorFeed": {"feed": [{"post": {"uri": "at://d/app.bsky.feed.post/r1",
+                                         "record": {"text": "design notes"}}}]},
+        })
+        results = [
+            members.enrich_member(members.MemberHandle("p5", "github", "x"), http),
+            members.enrich_member(members.MemberHandle("p5", "devto", "x"), http),
+            members.enrich_member(members.MemberHandle("p5", "bluesky", "x"), http),
+        ]
+        merged = members.merge_member_signals(results)["p5"]
+        self.assertIn("ai", merged.interests, "the tag both accounts share survives the merge")
+        self.assertEqual(merged.sources, ["bluesky", "devto", "github"])
+        self.assertEqual(len(merged.interests), len(set(merged.interests)), "no duplicate tags")
+
+    def test_contact_details_are_scrubbed_before_tagging(self):
+        from tandem_scout import members
+        http = self._http({"/articles": [{"title": "ai work, mail me at a@b.com", "tag_list": []}]})
+        result = members.enrich_member(members.MemberHandle("p6", "devto", "x"), http)
+        self.assertNotIn("@b.com", " ".join(result.interests) + str(result.evidence_urls))
+        self.assertIn("ai", result.interests)
+
+    def test_member_signals_never_become_an_invite(self):
+        from tandem_scout import members
+        http = self._http({"/repos": [{"name": "a", "description": "ai", "html_url": "https://github.com/x/a"}]})
+        result = members.enrich_member(members.MemberHandle("p7", "github", "x"), http)
+        self.assertNotIn("draft", result.to_payload())
+        self.assertEqual(set(result.to_payload()), {"person_id", "interests", "observations", "sources", "evidence_urls"})

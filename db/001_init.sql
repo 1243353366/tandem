@@ -42,7 +42,7 @@ CREATE TABLE consents (
     id             TEXT PRIMARY KEY,
     person_id      TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
     kind           TEXT NOT NULL
-                   CHECK (kind IN ('phone','email','discord','facebook','github','bluesky','mastodon')),
+                   CHECK (kind IN ('discord','facebook','github','bluesky','mastodon','hackernews','devto','telegram','gitlab','reddit','personal_site')),
     subject_hash   TEXT NOT NULL,        -- sha256(pepper || normalized identifier). Never the raw value.
     subject_hint   TEXT,                 -- e.g. "+1 ******0199" or "@handle", for the person's own UI
     scope          TEXT NOT NULL,        -- json array, e.g. ["verify_identity","match_signals"]
@@ -94,6 +94,27 @@ CREATE TABLE social_proofs (
 );
 
 CREATE INDEX social_proofs_pending ON social_proofs (person_id, status);
+
+-- ------------------------------------------------------ declared handles ----
+-- A person's own accounts, declared by that person. Not a lookup table: there is
+-- no query from a handle to a person, only from a person to a handle.
+CREATE TABLE declared_handles (
+    id           TEXT PRIMARY KEY,
+    person_id    TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+    network      TEXT NOT NULL,
+    handle       TEXT NOT NULL,
+    method       TEXT NOT NULL DEFAULT 'self_declared'
+                 CHECK (method IN ('self_declared','proof_post','oauth')),
+    verified     INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0,1)),
+    consent_id   TEXT REFERENCES consents(id) ON DELETE CASCADE,
+    evidence_url TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL,
+    UNIQUE (person_id, network)
+);
+
+CREATE INDEX declared_handles_consent ON declared_handles (consent_id);
+CREATE INDEX declared_handles_person ON declared_handles (person_id, network);
 
 -- -------------------------------------------------------------- signals ----
 -- Derived attributes used by the matcher. Each row cites the consent that

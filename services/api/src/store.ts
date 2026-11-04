@@ -104,13 +104,21 @@ export function personView(row: PersonRow, liveConsents: ConsentRow[] = []) {
 }
 
 /** Shape handed to the Python matcher. */
-export function matcherPayload(row: PersonRow, liveConsents: ConsentRow[]) {
+export function matcherPayload(
+  row: PersonRow,
+  liveConsents: ConsentRow[],
+  observed: string[] = [],
+) {
   return {
     id: row.id,
     display_name: row.display_name,
     timezone: row.timezone,
     interests: parseJson<string[]>(row.interests, []),
     project_tags: parseJson<string[]>(row.project_tags, []),
+    // Tags derived from the person's own declared handles. Declared interests win
+    // in the engine; these only break ties, because what you say should outrank
+    // what your commits imply.
+    observed_interests: observed,
     current_project: row.current_project,
     hours_per_week: row.hours_per_week,
     looking_for: parseJson<string[]>(row.looking_for, []),

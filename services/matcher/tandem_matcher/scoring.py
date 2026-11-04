@@ -50,6 +50,7 @@ class Profile:
     display_name: str = ""
     timezone: str | None = None
     interests: set[str] = field(default_factory=set)
+    observed_interests: set[str] = field(default_factory=set)
     project_tags: set[str] = field(default_factory=set)
     looking_for: set[str] = field(default_factory=set)
     offers: set[str] = field(default_factory=set)
@@ -96,6 +97,7 @@ class Profile:
             display_name=str(data.get("display_name") or ""),
             timezone=_tz_name(data),
             interests=vocab.canonical_set(_as_list(data.get("interests"))),
+            observed_interests=vocab.canonical_set(_as_list(data.get("observed_interests"))),
             project_tags=vocab.canonical_set(_as_list(data.get("project_tags"))),
             looking_for=roles,
             offers=offers,
@@ -267,7 +269,17 @@ def interest_factor(a: Profile, b: Profile) -> tuple[float, list[str], list[str]
     jaccard = _jaccard(a.interests, b.interests)
     project_overlap = _jaccard(a.project_tags, b.project_tags)
 
-    score = 0.80 * jaccard + 0.20 * project_overlap
+    # Declared interests dominate. Observed interests (derived from handles the
+    # person linked themselves) contribute only when both sides have them, so
+    # nobody is penalised for not linking an account.
+    observed_shared = sorted(
+        (a.observed_interests & b.observed_interests) - (a.interests | b.interests)
+    )
+    both_observed = bool(a.observed_interests and b.observed_interests)
+    observed_jaccard = _jaccard(a.observed_interests, b.observed_interests) if both_observed else 0.0
+    tag_jaccard = 0.85 * jaccard + 0.15 * observed_jaccard if both_observed else jaccard
+
+    score = 0.80 * tag_jaccard + 0.20 * project_overlap
     reasons: list[str] = []
     blockers: list[str] = []
 
@@ -277,6 +289,10 @@ def interest_factor(a: Profile, b: Profile) -> tuple[float, list[str], list[str]
         reasons.append(f"Shares {len(shared)} interest{'s' if len(shared) > 1 else ''}: {shown}{more}")
     elif a.interests and b.interests:
         blockers.append("No shared interests")
+
+    if observed_shared:
+        shown = ", ".join(observed_shared[:3])
+        reasons.append(f"Also writes about {shown}, from handles you both declared")
 
     if project_overlap:
         overlap = ", ".join(sorted(a.project_tags & b.project_tags)[:3])

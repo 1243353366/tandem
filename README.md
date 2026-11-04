@@ -44,6 +44,11 @@ This matters more than the feature list, so it is first.
   number, email address, or social handle to a person. Not "not yet". Not
   "enterprise only". Refused in code (`services/api/src/policy.ts`), tested in CI
   (`test/api.test.ts`), and documented (`docs/consent-model.md`).
+- **It does not hunt strangers.** The good path is a person adding **their own
+  handles** (`POST /v1/handles`), which creates a consent scoped to
+  `signal.enrich`: we may read what they published, for their own matching, and
+  revoking the handle deletes everything derived from it. A handle is never a
+  lookup key, and no endpoint maps one to a person.
 - **It does not harvest contact details.** Phone numbers are hashed with a server
   pepper the moment they arrive. The raw number is never stored, never logged,
   and never exported. Public profile fields reject anything that looks like a
@@ -75,7 +80,7 @@ git clone <this repo> tandem && cd tandem
 
 make demo     # end-to-end on throwaway ports: seed, match, scout, tear down
 make dev      # api :8080, matcher :8081, web :5173
-make test     # all three suites (143 tests)
+make test     # all three suites (161 tests)
 ```
 
 `make demo` is the fastest way to see it move. It boots both services on spare
@@ -260,8 +265,8 @@ make test-fast   # api + matcher
 | suite | count | covers |
 | --- | --- | --- |
 | `services/matcher/test` | 36 | scoring, vocabulary, caps, ranking, malformed input |
-| `services/api/test` | 47 | consent flow, OTP replay/rate limits, receipts, proofs, policy, erasure |
-| `services/scout/test` | 60 | adapters, PII scrubbing, queue rules, opt-out, public/private surfaces, end-to-end replay |
+| `services/api/test` | 59 | consent flow, OTP replay/rate limits, receipts, proofs, policy, erasure |
+| `services/scout/test` | 66 | adapters, PII scrubbing, queue rules, opt-out, public/private surfaces, end-to-end replay |
 
 No network in any of them. `scripts/demo.sh` is the integration test, and CI runs
 both.

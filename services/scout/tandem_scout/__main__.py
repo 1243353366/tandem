@@ -13,17 +13,81 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from . import members as member_mod
 from . import policy, queue, sources
 from .models import Observation
 
 DEFAULT_OUT = Path(__file__).resolve().parents[3] / "data" / "scout"
 DEFAULT_OPTOUT = Path(__file__).resolve().parents[3] / "data" / "scout" / "optout.txt"
 INVITE_URL = "https://tandem.example/join"
+
+
+def _service_call(url: str, token: str, body: dict | None = None) -> dict:
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(url, data=data, method="POST" if data else "GET")
+    request.add_header("Content-Type", "application/json")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return json.loads(response.read().decode())
+
+
+def run_members(args) -> int:
+    """Read the accounts members declared themselves, and store what they imply.
+
+    This is the consented path. Nothing here searches for anyone: the handle list
+    comes from the API, and every entry was typed by the person it belongs to.
+    """
+    base = args.api.rstrip("/")
+    try:
+        listing = _service_call(f"{base}/v1/service/members", args.service_token)
+    except (urllib.error.URLError, OSError) as exc:
+        print(
+            f"could not reach the API at {base} ({exc}).\n"
+            "start it with `make dev`, or pass --api. In production these two endpoints "
+            "also need TANDEM_SERVICE_TOKEN.",
+            file=sys.stderr,
+        )
+        return 2
+    members = listing.get("members", [])
+    if not members:
+        print("no members have declared a readable handle yet (this is the normal first run)")
+        return 0
+
+    handles = [
+        member_mod.MemberHandle(person["person_id"], handle["network"], handle["handle"])
+        for person in members
+        for handle in person.get("handles", [])
+    ]
+    results = [member_mod.enrich_member(handle) for handle in handles]
+    merged = member_mod.merge_member_signals(results)
+
+    stored = 0
+    for person_id, derived in merged.items():
+        for error in derived.errors:
+            print(f"  {person_id[:8]}  {error}")
+        if not derived.interests:
+            continue
+        response = _service_call(
+            f"{base}/v1/service/members/{person_id}/signals", args.service_token, derived.to_payload()
+        )
+        stored += int(response.get("stored", 0))
+        print(
+            f"  {person_id[:8]}  {derived.observations:>3} item(s)  "
+            f"{', '.join(derived.interests[:4])}  ({'+'.join(derived.sources) or 'none'})"
+        )
+
+    print(f"\nread {len(handles)} declared handle(s) from {len(members)} member(s); stored {stored} signal(s)")
+    print("revoking a handle removes every signal derived from it, in the same transaction")
+    return 0
 
 
 def load_replay(directory: Path) -> list[Observation]:
@@ -75,12 +139,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--live", action="store_true", help="actually call public endpoints")
     parser.add_argument("--replay", metavar="DIR", help="read recorded observations instead of the network")
     parser.add_argument("--policy", action="store_true", help="print the discovery policy and exit")
+    parser.add_argument(
+        "--members", action="store_true",
+        help="read the declared handles of consenting members and store their signals "
+             "(the consented path: no stranger scanning)",
+    )
+    parser.add_argument("--api", default="http://127.0.0.1:8080", help="API base for --members")
+    parser.add_argument("--service-token", default=os.environ.get("TANDEM_SERVICE_TOKEN", ""))
     parser.add_argument("--json", action="store_true", help="print the queue as JSON")
     args = parser.parse_args(argv)
 
     if args.policy:
         print(json.dumps(policy.policy_summary(), indent=2))
         return 0
+
+    if args.members:
+        return run_members(args)
 
     topics = [t.strip() for t in args.topics.split(",") if t.strip()]
     source_names = [s.strip() for s in args.sources.split(",") if s.strip()]
