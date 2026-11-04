@@ -22,3 +22,9 @@ venv/
 .idea/
 .vscode/
 *.swp
+
+# runtime artifacts from running a service locally
+services/*/data/
+*.db
+*.db-shm
+*.db-wal
