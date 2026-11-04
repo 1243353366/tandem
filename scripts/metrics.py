@@ -71,8 +71,16 @@ class Metrics:
 
 
 def parse_trailers(body: str) -> dict[str, str]:
+    """Trailers live in the last paragraph, as git defines them.
+
+    Reading the whole body instead let a commit message line beginning with "Change:"
+    become a change id, which is how this project named a change after a sentence.
+    """
+    paragraphs = [block for block in body.split("\n\n") if block.strip()]
+    if not paragraphs:
+        return {}
     found: dict[str, str] = {}
-    for line in body.splitlines():
+    for line in paragraphs[-1].splitlines():
         if ":" not in line:
             continue
         key, _, value = line.partition(":")

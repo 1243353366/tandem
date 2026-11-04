@@ -23,6 +23,10 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
   so the next run does not open it, and the item is dropped with the source reporting
   `injection`. `make injections` prints the log.
 
+- **Trailer parsing reads the last paragraph only.** The first version scanned the whole
+  commit body, so a message line beginning with "Change:" renamed a change after a sentence.
+  Found by running `make metrics` immediately after writing it.
+
 - **The three process metrics, from evidence.** `make metrics` (scripts/metrics.py) reports
   defects discovered after merge, average correction cycles per change, and time from
   initial implementation to verified completion, computed from commit trailers and

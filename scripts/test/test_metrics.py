@@ -26,6 +26,10 @@ class TrailerTests(unittest.TestCase):
         self.assertEqual(found["change"], "review-pass-3")
         self.assertEqual(found["fix-after-merge"], "47fd058")
 
+    def test_prose_that_starts_with_change_is_not_a_trailer(self):
+        body = "Explanation.\n\nChange: trailers existed before this commit, so it reports nothing\n\nMore prose."
+        self.assertEqual(metrics.parse_trailers(body), {})
+
     def test_ordinary_text_containing_a_colon_is_not_a_trailer(self):
         self.assertEqual(metrics.parse_trailers("note: this is prose\n"), {})
 
