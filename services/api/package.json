@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Tandem API — profiles, consent receipts, social identity proofs, match ranking.",
+  "description": "Tandem API \u2014 profiles, consent receipts, social identity proofs, match ranking.",
   "engines": {
     "node": ">=22.6.0"
   },
@@ -11,8 +11,13 @@
     "start": "node src/main.ts",
     "dev": "TANDEM_DEV=1 node --watch src/main.ts",
     "test": "node --test test/*.test.ts",
-    "smoke": "node test/smoke.ts"
+    "smoke": "node test/smoke.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {},
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "typescript": "5.6.3"
+  }
 }

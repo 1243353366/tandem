@@ -276,9 +276,9 @@ export function removeHandle(db: Db, personId: string, handleId: string): boolea
 
   return transaction(db, () => {
     db.prepare("DELETE FROM declared_handles WHERE id = ?").run(handleId);
+    audit(db, personId, "handle.removed", null, { network: row.network });
+    return true;
   });
-  audit(db, personId, "handle.removed", null, { network: row.network });
-  return true;
 }
 
 /**

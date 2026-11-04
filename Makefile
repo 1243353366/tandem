@@ -20,6 +20,7 @@ help:
 	@echo
 	@echo "  make dev          run api + matcher + web on localhost"
 	@echo "  make demo         end-to-end demo on throwaway ports (safe to re-run)"
+	@echo "  make typecheck    type check the api (needs npm install)"
 	@echo "  make test         all suites (matcher, api, scout)"
 	@echo "  make test-fast    api + matcher only"
 	@echo "  make seed         load the demo cohort into a running api"
@@ -33,6 +34,10 @@ help:
 	@echo "  make web          serve the intake page on :5173"
 	@echo "  make clean        remove local runtime data"
 	@echo
+
+.PHONY: typecheck
+typecheck:
+	@cd $(API_DIR) && npm install --no-audit --no-fund --silent && npx tsc --noEmit && echo "api types: clean"
 
 .PHONY: dev
 dev:

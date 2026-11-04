@@ -88,6 +88,7 @@ export type IntroRow = {
   proposed_by: string;
   proposed_at: string;
   responded_at: string | null;
+  closed_at: string | null;
 };
 
 function pair(aId: string, bId: string): [string, string] {

@@ -448,3 +448,24 @@ describe("a failure can be traced to one request", () => {
     assert.notEqual(blocked.json.request_id, okId, "ids are per request, not per process");
   });
 });
+
+describe("removing a handle", () => {
+  it("reports success and records the removal", async () => {
+    const person = await intake("HandleRemover");
+    await verifyPhone(person.token, "+15550200060");
+    const added = await harness.api("POST", "/v1/handles", {
+      token: person.token,
+      body: { network: "github", handle: "handle-remover" },
+    });
+    assert.equal(added.status, 201, JSON.stringify(added.json));
+    const handleId = added.json.handle.id;
+
+    const removed = await harness.api("DELETE", `/v1/handles/${handleId}`, { token: person.token });
+    assert.equal(removed.status, 200, "the route reports the removal, not a missing handle");
+
+    const rows = harness.db
+      .prepare("SELECT COUNT(*) AS n FROM audit_log WHERE actor = ? AND action = 'handle.removed'")
+      .get(person.id) as { n: number };
+    assert.equal(rows.n, 1, "the removal is in the audit trail");
+  });
+});

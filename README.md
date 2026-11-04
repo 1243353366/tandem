@@ -96,7 +96,8 @@ git clone <this repo> tandem && cd tandem
 
 make demo     # end-to-end on throwaway ports: seed, match, scout, tear down
 make dev      # api :8080, matcher :8081, web :5173
-make test     # all three suites (194 tests)
+make typecheck  # tsc --noEmit on the api
+make test     # all three suites (195 tests)
 ```
 
 `make demo` is the fastest way to see it move. It boots both services on spare
@@ -341,7 +342,7 @@ make test-fast   # api + matcher
 | suite | count | covers |
 | --- | --- | --- |
 | `services/matcher/test` | 36 | scoring, vocabulary, caps, ranking, malformed input |
-| `services/api/test` | 85 | consent flow, OTP replay and per-caller limits, receipts, proofs, policy, erasure, the cap both ways, export completeness, intro cooldown, CORS |
+| `services/api/test` | 86 | consent flow, OTP replay and per-caller limits, receipts, proofs, policy, erasure, the cap both ways, export completeness, intro cooldown, CORS |
 | `services/scout/test` | 73 | adapters, PII scrubbing, queue rules, opt-out, public/private surfaces, end-to-end replay |
 
 No network in any of them. `scripts/demo.sh` is the integration test, and CI runs

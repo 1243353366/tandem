@@ -306,7 +306,7 @@ const ROUTES: Route[] = [
     pattern: /^\/v1\/service\/cohort$/,
     handler: (ctx, req, res) => {
       requireService(ctx, req);
-      const one = (sql: string, ...args: unknown[]) =>
+      const one = (sql: string, ...args: Array<string | number>) =>
         Number((ctx.db.prepare(sql).get(...args) as { n?: number } | undefined)?.n ?? 0);
       const since = new Date(Date.now() - 14 * 86_400_000).toISOString();
       send(res, 200, {
@@ -909,7 +909,7 @@ export function createApp(db: Db, config: Config, fetcher: FetchLike = fetch): A
 
       try {
         if (req.method !== "GET" && req.method !== "DELETE") {
-          req.body = await readBody(req);
+          (req as ApiRequest).body = await readBody(req);
         }
         await routed.route.handler(
           { db, config, fetcher },

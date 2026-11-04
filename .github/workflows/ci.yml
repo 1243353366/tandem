@@ -29,6 +29,12 @@ jobs:
         working-directory: services/matcher
         run: python3 -m unittest discover -s test -v
 
+      - name: api type check
+        working-directory: services/api
+        run: |
+          npm install --no-audit --no-fund
+          npx tsc --noEmit
+
       - name: api tests
         working-directory: services/api
         run: node --test test/*.test.ts

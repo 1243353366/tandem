@@ -16,11 +16,21 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
 
 ### Added
 
+- **A type check that actually runs.** `services/api` had no `tsconfig`, no typescript and
+  no type step anywhere, so "the types are consistent" was an assumption. `npx tsc
+  --noEmit` now runs in CI and as `make typecheck`.
+
 - **Request ids.** Every response carries `X-Request-Id`, error bodies include
   `request_id`, and server-side error logs are prefixed with it, so a report of "something
   broke" can be tied to one request.
 
 ### Fixed
+
+- **`removeHandle` reported nothing and recorded nothing.** Moving the hand-rolled
+  `BEGIN` into `transaction()` left the audit write and `return true` after the
+  transaction, so the function returned `undefined` and `handle.removed` was never
+  written. The tests passed because the delete itself still happened. Found by `tsc`,
+  not by a test; there is now a test.
 
 - **CORS headers reach the response, not only the preflight.** Routes that sent their own
   body answered without `Access-Control-Allow-Origin`, so a browser approved the preflight
