@@ -14,6 +14,14 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
   `reveals_today` and `reveals_remaining_today`. Erased-account carry-over counts
   introductions too (`retired_identities.count_at_retirement`, backfilled).
 
+### Security
+
+- **Scout injection review, seven findings.** See `docs/security-review-scout-injection.md`.
+  Memorable ones: the consented member-enrichment path had its own fetcher and no guard at
+  all; zero-width and fullwidth spelling defeated every pattern; a corrupt quarantine cache
+  read as empty and silently released every held URL; an excerpt could carry ANSI escapes
+  into the operator's terminal; oversized bodies were trimmed instead of refused.
+
 ### Added
 
 - **Injection attempts are logged and the connection is killed.** `tandem_scout/injection.py`

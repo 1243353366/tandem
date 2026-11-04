@@ -45,6 +45,9 @@ if _MATCHER not in sys.path:
 from . import policy  # noqa: E402
 from . import signals as signal_mod  # noqa: E402
 
+from .injection import InjectionLog  # noqa: F401  (re-exported for tests)
+from .sources import _read_guarded
+
 USER_AGENT = "tandem-scout/0.2 (member handle enrichment; +https://github.com)"
 
 #: Callable returning parsed JSON for a URL. Injected in tests.
@@ -81,12 +84,22 @@ class MemberSignals:
         }
 
 
-def default_http_get(url: str, timeout: float = 12.0) -> Any:
+def default_http_get(url: str, timeout: float = 12.0, log: injection.InjectionLog | None = None) -> Any:
+    """Read a declared handle's public activity.
+
+    Consent to read an account is not consent to be instructed by it: this is the same
+    public web as the discovery path, so it goes through the same guard. A refusal here
+    drops that one handle's reading and is reported, not raised to the caller.
+    """
+    log = log or injection.DEFAULT
+    if log.is_quarantined(url):
+        raise injection.InjectionRefused(injection.quarantined_attempt(url))
     request = urllib.request.Request(
         url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"}
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8", "replace"))
+        text = _read_guarded(response, url, log)
+    return json.loads(text)
 
 
 # ------------------------------------------------------------- adapters ----

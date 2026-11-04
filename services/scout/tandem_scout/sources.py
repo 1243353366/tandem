@@ -60,30 +60,52 @@ def _addresses_reader(observation, log: injection.InjectionLog) -> bool:
     Fetch-time detection covers the wire; this covers text that arrived inside a JSON
     field, where the poison is in a value rather than in the body we streamed.
     """
+    url = observation.url or ""
+    key = url or f"src:{observation.source}:{observation.handle}"
+    if log.is_quarantined(key):
+        return True
     try:
-        log.guard(observation.text or "", source=observation.source, url=observation.url or "")
+        log.guard(
+            observation.text or "",
+            source=observation.source,
+            url=url,
+            handle=observation.handle or "",
+        )
     except injection.InjectionRefused:
         return True
     return False
 
 
-def _read_guarded(response, url: str, log: injection.InjectionLog) -> str:
+def _read_guarded(response, url: str, log: injection.InjectionLog, handle: str = "") -> str:
     """Read the body in chunks, and stop the moment it addresses a reader.
 
     Scanning as we read is the difference between noticing and closing: by the time a
     whole body has been read and stored, the connection has done its job.
     """
+    final_url = ""
     buffer = ""
     while True:
         block = response.read(CHUNK)
         if not block:
             return buffer
+        if not final_url:
+            # After a redirect this is where the text actually came from.
+            final_url = str(getattr(response, "geturl", lambda: url)())
         buffer += block.decode("utf-8", "replace")
         if injection.scan(buffer):
             response.close()
-            log.guard(buffer, source=url.split("//")[-1].split("/")[0], url=url)
-        if len(buffer) >= BODY_CAP:
-            return buffer[:BODY_CAP]
+            log.guard(
+                buffer,
+                source=final_url.split("//")[-1].split("/")[0] or url,
+                url=url,
+                handle=handle,
+                final_url=final_url,
+            )
+        if len(buffer) > BODY_CAP:
+            # Refused, not trimmed: a body this size is not a post, and trimming it
+            # would mean scanning the first 512 KiB of a document chosen to exceed it.
+            response.close()
+            raise injection.InjectionRefused(injection.too_large_attempt(url, limit=BODY_CAP))
 
 
 def _open(url: str, log: injection.InjectionLog, headers: dict[str, str], timeout: float):

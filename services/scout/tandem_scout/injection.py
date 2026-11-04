@@ -13,7 +13,9 @@ quarantined so the next run does not open it again.
 from __future__ import annotations
 
 import json
+import os
 import re
+import unicodedata
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,18 +39,46 @@ RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
 
 MAX_EXCERPT = 160
 
+ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]")
+C0_C1 = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def visible(text: str) -> str:
+    """Text with anything that acts on a terminal or a renderer removed.
+
+    Escape sequences, C0/C1 controls and Unicode format characters (zero-width
+    joiners, bidi overrides) have no meaning as content and plenty as decoration: a
+    log line containing them can repaint the console that prints it.
+    """
+    text = ANSI.sub("", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    text = C0_C1.sub(" ", text)
+    return " ".join(text.split())
+
+
+def normalize_for_scan(text: str) -> str:
+    """Fold the cheap obfuscations before matching.
+
+    NFKC collapses fullwidth and compatibility forms; dropping Cf removes the
+    zero-width characters people insert between letters of a word to defeat a
+    pattern match; collapsing whitespace removes the same trick with padding.
+    """
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    return " ".join(text.split())
+
 
 def _excerpt(text: str, match: re.Match[str]) -> str:
-    """A short, single-line, redacted-by-truncation quote for the log."""
+    """A short, single-line, terminal-safe quote for the log."""
     start = max(0, match.start() - 40)
-    raw = text[start : start + MAX_EXCERPT]
-    return " ".join(raw.split())
+    return visible(text[start : start + MAX_EXCERPT])
 
 
 def scan(text: str) -> list[tuple[str, str]]:
     """Every rule that fired, with an excerpt. Empty means nothing addressed a reader."""
     if not text:
         return []
+    text = normalize_for_scan(text)
     hits: list[tuple[str, str]] = []
     for rule, pattern in RULES:
         match = pattern.search(text)
@@ -65,6 +95,11 @@ class Attempt:
     excerpt: str
     at: str
     action: str = "connection_closed"
+    final_url: str = ""   # after redirects: what we actually read
+    key: str = ""         # what gets quarantined; a URL, or source:handle
+
+    def quarantine_key(self) -> str:
+        return self.key or self.url or f"src:{self.source}"
 
     def to_json(self) -> dict[str, str]:
         return asdict(self)
@@ -88,32 +123,72 @@ class InjectionLog:
         self.log_path = Path(log_path)
         self.quarantine_path = Path(quarantine_path)
 
-    def quarantined(self) -> dict[str, dict[str, str]]:
-        if not self.quarantine_path.exists():
-            return {}
-        try:
-            data = json.loads(self.quarantine_path.read_text())
-        except (json.JSONDecodeError, OSError):
-            return {}
-        return data if isinstance(data, dict) else {}
+    def _from_log(self) -> dict[str, dict[str, str]]:
+        """Rebuild the hold list from the append-only log.
 
-    def is_quarantined(self, url: str) -> bool:
-        return url in self.quarantined()
+        The log is the evidence and the cache is a convenience, so a damaged cache
+        cannot silently un-quarantine anything: it is rebuilt from the log instead of
+        being read as empty.
+        """
+        held: dict[str, dict[str, str]] = {}
+        if not self.log_path.exists():
+            return held
+        for line in self.log_path.read_text(errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            key = str(event.get("key") or event.get("url") or "")
+            if key:
+                held.setdefault(key, {
+                    "first_seen": str(event.get("at", "")),
+                    "source": str(event.get("source", "")),
+                    "rule": str(event.get("rule", "")),
+                })
+        return held
+
+    def quarantined(self) -> dict[str, dict[str, str]]:
+        held = self._from_log()
+        if self.quarantine_path.exists():
+            try:
+                cached = json.loads(self.quarantine_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                cached = {}
+            if isinstance(cached, dict):
+                for key, value in cached.items():
+                    held.setdefault(key, value if isinstance(value, dict) else {})
+        return held
+
+    def is_quarantined(self, key: str) -> bool:
+        return key in self.quarantined()
 
     def record(self, attempt: Attempt) -> None:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.log_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(attempt.to_json(), sort_keys=True) + "\n")
-        if attempt.url:
-            held = self.quarantined()
-            held.setdefault(
-                attempt.url,
-                {"first_seen": attempt.at, "source": attempt.source, "rule": attempt.rule},
-            )
-            self.quarantine_path.parent.mkdir(parents=True, exist_ok=True)
-            self.quarantine_path.write_text(json.dumps(held, indent=2, sort_keys=True) + "\n")
+        line = json.dumps(attempt.to_json(), sort_keys=True) + "\n"
+        # One O_APPEND write per attempt: two scouts racing cannot interleave halves of
+        # a line, and nothing rewrites history already written.
+        handle = os.open(self.log_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+        try:
+            os.write(handle, line.encode("utf-8"))
+            os.fsync(handle)
+        finally:
+            os.close(handle)
 
-    def guard(self, text: str, *, source: str, url: str) -> str:
+        held = self.quarantined()
+        held.setdefault(
+            attempt.quarantine_key(),
+            {"first_seen": attempt.at, "source": attempt.source, "rule": attempt.rule},
+        )
+        self.quarantine_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.quarantine_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(held, indent=2, sort_keys=True) + "\n")
+        os.replace(tmp, self.quarantine_path)   # atomic: a reader sees old or new, never half
+
+    def guard(self, text: str, *, source: str, url: str, handle: str = "",
+              final_url: str = "", declared_at: str | None = None) -> str:
         """Return the text, or log the attempt and raise InjectionRefused."""
         hits = scan(text)
         if not hits:
@@ -124,10 +199,25 @@ class InjectionLog:
             source=source,
             url=url,
             excerpt=excerpt,
-            at=datetime.now(timezone.utc).isoformat(),
+            at=declared_at or datetime.now(timezone.utc).isoformat(),
+            final_url=final_url,
+            key=url or (f"src:{source}:{handle}" if handle else ""),
         )
         self.record(attempt)
         raise InjectionRefused(attempt)
+
+
+def too_large_attempt(url: str, source: str = "", limit: int = 0) -> Attempt:
+    """A body past the cap is refused, not silently trimmed."""
+    return Attempt(
+        rule="body_cap_exceeded",
+        source=source or url.split("//")[-1].split("/")[0],
+        url=url,
+        excerpt=f"body exceeded {limit} bytes; refused rather than truncated",
+        at=datetime.now(timezone.utc).isoformat(),
+        action="refused_oversized",
+        key=url,
+    )
 
 
 def quarantined_attempt(url: str, source: str = "") -> Attempt:
