@@ -16,6 +16,13 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
 
 ### Added
 
+- **`LIVING.md`**, the current state of the repository: what works, what has been measured and
+  what has not, which decisions are open, and which limits are known. Updated on every push
+  that changes behaviour, and linked from the README.
+- **Repository visibility:** confirmed public (`visibility=public`, labelled social
+  networking) before this push.
+
+
 - **An instrument for the injection question, and a pre-registration**
   (`experiments/`, `docs`-adjacent). Two oracles kept apart: `attempt` (did a reader reach for
   a canary that cannot exist) and `behavior` (did a reader break a rule the server enforces:
@@ -35,6 +42,18 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
   recorded as `status 0`, so a poisoned plan's exfiltration step becomes a result line instead
   of a request. Pilot at n=1 with the positive control firing: clean 0 adopted, poisoned 0
   adopted (reported), control 1 adopted and refused, no breaches anywhere.
+
+### Security
+
+- **The rate limiter trusted a header the caller writes** (`services/api/src/app.ts`,
+  `callerOf`). `X-Forwarded-For` was read unconditionally, so a fresh value per request
+  produced a fresh identity and reset every per-caller budget: verification codes, browsing
+  and introductions. It is now read only when `TANDEM_TRUST_PROXY=1`, and the socket address
+  is used otherwise. Regression test in `test/identity.test.ts`.
+- **Review pass, checked and unchanged:** body size cap (413 on overflow, chunks dropped rather
+  than buffered), parameterised SQL in the store, erase nullifying profile columns while
+  keeping the hashed cap row, export covering signals, handles and intros, request-id
+  correlation on success and error, OTP attempt limits, dead-code and unreachable-branch scan.
 
 ### Fixed
 

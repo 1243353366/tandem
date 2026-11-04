@@ -220,9 +220,15 @@ function requireService(ctx: Ctx, req: ApiRequest): void {
   }
 }
 
-function callerOf(req: IncomingMessage): string {
+export function callerOf(req: IncomingMessage): string {
+  const remote = req.socket.remoteAddress || "";
+  // X-Forwarded-For is written by the caller. Trusting it unconditionally made the rate
+  // limiter's key attacker-chosen: a fresh value per request reset every per-caller budget
+  // (verification codes, browsing, introductions). It is only read when this deployment is
+  // actually behind a proxy that sets it.
+  if (process.env.TANDEM_TRUST_PROXY !== "1") return remote;
   const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",")[0]?.trim() ?? "";
-  return forwarded || req.socket.remoteAddress || "";
+  return forwarded || remote;
 }
 
 const ROUTES: Route[] = [

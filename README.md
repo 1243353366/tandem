@@ -377,6 +377,12 @@ anything is worse than no metric.
 What these numbers cannot tell you: they measure the review process, not the product. A
 quiet week means this reviewer missed things, not that the code got better.
 
+## Where it stands
+
+[`LIVING.md`](LIVING.md) is the current state: what works, what has been measured, what
+has not, and which decisions are still open. It is updated on every push that changes
+behaviour, so it does not drift into a wish list.
+
 ## Experiments
 
 The scanner is an instrument, not a proof. `experiments/` holds the other half: two oracles
