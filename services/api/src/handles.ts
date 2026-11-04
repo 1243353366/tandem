@@ -377,18 +377,29 @@ export function applyMemberSignals(
     .slice(0, 12);
   const observations = Number(body.observations ?? 0);
   const sources = Array.isArray(body.sources) ? body.sources.map(String) : [];
+  // An observation belongs to the network it came from. Without this, a Mastodon
+  // read was written under the GitHub consent and deleting one did not remove the
+  // other's signals.
+  const network = body.network ? String(body.network).trim().toLowerCase() : null;
+  const scoped = network ? live.filter((consent) => consent.kind === network) : live;
+  if (!scoped.length) {
+    throw conflict(`That member has no live handle consent for ${network}, so there is nothing to derive.`);
+  }
 
   db.exec("BEGIN");
   try {
     db.prepare("DELETE FROM signals WHERE person_id = ? AND kind = 'interest' AND source LIKE 'handle:%'")
       .run(personId);
     const insert = db.prepare(
-      `INSERT INTO signals (id, person_id, consent_id, source, kind, value, confidence, observed_at)
-       VALUES (?, ?, ?, ?, 'interest', ?, ?, ?)`,
+      `INSERT INTO signals (id, person_id, consent_id, source, kind, value, confidence, observed_at, expires_at)
+       VALUES (?, ?, ?, ?, 'interest', ?, ?, ?, ?)`,
     );
     const now = new Date().toISOString();
+    // Signals go stale. Ninety days is long enough to be useful and short enough
+    // that a quiet account stops steering matches.
+    const expiresAt = new Date(Date.now() + 90 * 86_400_000).toISOString();
     let stored = 0;
-    for (const consent of live) {
+    for (const consent of scoped) {
       for (const interest of interests) {
         insert.run(
           `sig_${personId.slice(0, 8)}_${consent.kind}_${interest}_${stored}`,
@@ -398,6 +409,7 @@ export function applyMemberSignals(
           interest,
           Math.min(1, 0.5 + observations / 60),
           now,
+          expiresAt,
         );
         stored += 1;
       }
@@ -426,8 +438,9 @@ export function observedInterests(db: Db, personId: string): string[] {
   const rows = db
     .prepare(
       `SELECT DISTINCT value FROM signals
-        WHERE person_id = ? AND kind = 'interest' AND source LIKE 'handle:%'`,
+        WHERE person_id = ? AND kind = 'interest' AND source LIKE 'handle:%'
+          AND (expires_at IS NULL OR expires_at > ?)`,
     )
-    .all(personId) as Array<{ value: string }>;
+    .all(personId, new Date().toISOString()) as Array<{ value: string }>;
   return rows.map((row) => row.value);
 }

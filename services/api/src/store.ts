@@ -190,18 +190,73 @@ export function countPeople(db: Db): number {
  * we keep one audit line with no identifiers in it so the deletion itself is
  * accountable without being a record of who was deleted.
  */
+/**
+ * Erase means erase. Every descriptive column is emptied, every derived table is
+ * cleared, and the only thing kept is a hash of each verified identifier with the
+ * number of matches it had in the current window. That hash already existed as a
+ * consent subject; it carries no name, location or interest, and without it an
+ * erase-and-return cycle would reset the two-a-fortnight cap and recycle a phone
+ * number into a fresh identity.
+ */
 export function erasePerson(db: Db, id: string): void {
-  db.prepare("UPDATE people SET status = 'erased', display_name = '[erased]', headline = '' WHERE id = ?").run(id);
-  db.prepare("DELETE FROM signals WHERE person_id = ?").run(id);
-  db.prepare("DELETE FROM social_proofs WHERE person_id = ?").run(id);
-  db.prepare("DELETE FROM consents WHERE person_id = ?").run(id);
-  db.prepare("DELETE FROM phone_challenges WHERE person_id = ?").run(id);
-  db.prepare("DELETE FROM matches WHERE a_id = ? OR b_id = ?").run(id, id);
-  // Introductions and declared handles point at the person, so they go too.
-  // Leaving either behind would leave a public thread URL naming someone who left.
-  db.prepare("DELETE FROM intros WHERE a_id = ? OR b_id = ? OR proposed_by = ?").run(id, id, id);
-  db.prepare("DELETE FROM declared_handles WHERE person_id = ?").run(id);
-  audit(db, id, "person.erased", null, {});
+  const since = new Date(Date.now() - 14 * 86_400_000).toISOString();
+  const used = Number(
+    (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM matches
+            WHERE (a_id = ? OR b_id = ?) AND COALESCE(matched_at, created_at) >= ?`,
+        )
+        .get(id, id, since) as { n?: number } | undefined
+    )?.n ?? 0,
+  );
+  const subjects = db
+    .prepare("SELECT kind, subject_hash FROM consents WHERE person_id = ? AND revoked_at IS NULL")
+    .all(id) as Array<{ kind: string; subject_hash: string }>;
+
+  db.exec("BEGIN");
+  try {
+    for (const subject of subjects) {
+      db.prepare(
+        `INSERT INTO retired_identities (id, kind, subject_hash, matches_at_retirement, retired_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(newId(), subject.kind, subject.subject_hash, used, nowIso());
+    }
+    db.prepare(
+      `UPDATE people SET
+         status = 'erased',
+         display_name = '[erased]',
+         headline = '',
+         location_city = '',
+         location_region = '',
+         location_country = '',
+         timezone = '',
+         interests = '[]',
+         current_project = '',
+         project_tags = '[]',
+         hours_per_week = 0,
+         looking_for = '[]',
+         offers = '[]',
+         comm_style = '{}',
+         visibility = 'hidden',
+         updated_at = ?
+       WHERE id = ?`,
+    ).run(nowIso(), id);
+    db.prepare("DELETE FROM signals WHERE person_id = ?").run(id);
+    db.prepare("DELETE FROM social_proofs WHERE person_id = ?").run(id);
+    db.prepare("DELETE FROM consents WHERE person_id = ?").run(id);
+    db.prepare("DELETE FROM phone_challenges WHERE person_id = ?").run(id);
+    db.prepare("DELETE FROM matches WHERE a_id = ? OR b_id = ?").run(id, id);
+    // Introductions and declared handles point at the person, so they go too.
+    // Leaving either behind would leave a public thread URL naming someone who left.
+    db.prepare("DELETE FROM intros WHERE a_id = ? OR b_id = ? OR proposed_by = ?").run(id, id, id);
+    db.prepare("DELETE FROM declared_handles WHERE person_id = ?").run(id);
+    audit(db, id, "person.erased", null, { kept: "identifier hashes and match count only" });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 // ------------------------------------------------------------- consents ----
@@ -326,6 +381,15 @@ export function recentChallengeCount(db: Db, personId: string, windowSeconds = 3
   return row?.n ?? 0;
 }
 
+export function recentChallengeCountForOrigin(db: Db, origin: string, windowSeconds = 3600): number {
+  if (!origin) return 0;
+  const since = new Date(Date.now() - windowSeconds * 1000).toISOString();
+  const row = db
+    .prepare("SELECT COUNT(*) AS n FROM phone_challenges WHERE requested_from = ? AND created_at > ?")
+    .get(origin, since) as { n: number } | undefined;
+  return row?.n ?? 0;
+}
+
 export function createChallenge(
   db: Db,
   values: {
@@ -335,14 +399,15 @@ export function createChallenge(
     salt: string;
     ttlSeconds: number;
     personId: string;
+    requestedFrom?: string;
   },
 ): { id: string; expiresAt: string } {
   const id = newId();
   const expiresAt = isoIn(values.ttlSeconds);
   db.prepare(
     `INSERT INTO phone_challenges
-       (id, phone_hash, phone_hint, code_hash, salt, attempts, created_at, expires_at, consumed_at, person_id)
-     VALUES (?, ?, ?, ?, ?, 0, ?, ?, NULL, ?)`,
+       (id, phone_hash, phone_hint, code_hash, salt, attempts, created_at, expires_at, consumed_at, person_id, requested_from)
+     VALUES (?, ?, ?, ?, ?, 0, ?, ?, NULL, ?, ?)`,
   ).run(
     id,
     values.phoneHash,
@@ -352,6 +417,7 @@ export function createChallenge(
     nowIso(),
     expiresAt,
     values.personId,
+    values.requestedFrom ?? "",
   );
   return { id, expiresAt };
 }
@@ -448,8 +514,8 @@ export function recordMatch(
 ): void {
   const [a, b] = values.aId < values.bId ? [values.aId, values.bId] : [values.bId, values.aId];
   db.prepare(
-    `INSERT INTO matches (id, a_id, b_id, score, score_breakdown, reasons, blockers, engine_version, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO matches (id, a_id, b_id, score, score_breakdown, reasons, blockers, engine_version, created_at, matched_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(a_id, b_id) DO UPDATE SET
        score = excluded.score,
        score_breakdown = excluded.score_breakdown,
@@ -466,6 +532,7 @@ export function recordMatch(
     JSON.stringify(values.reasons),
     JSON.stringify(values.blockers),
     values.engineVersion,
+    nowIso(),
     nowIso(),
   );
 }

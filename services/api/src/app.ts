@@ -46,7 +46,7 @@ import {
 } from "./store.ts";
 import type { PersonRow } from "./store.ts";
 import { startPhoneConsent, verifyPhoneConsent } from "./consent.ts";
-import { createIntro, introView, listIntrosFor, respondToIntro } from "./intros.ts";
+import { closeIntro, createIntro, introView, listIntrosFor, respondToIntro } from "./intros.ts";
 import { matchQuota } from "./quota.ts";
 import {
   NETWORKS,
@@ -128,10 +128,32 @@ function send(res: ServerResponse, status: number, payload: unknown, headers: Re
   res.end(body);
 }
 
+/**
+ * Reflect only origins we were told about. The old version echoed any Origin
+ * header, which let any page on the internet call this API from a visitor's
+ * browser. Bearer tokens made that survivable, not correct.
+ */
+function allowedOrigins(): string[] {
+  const configured = `${process.env.TANDEM_ALLOWED_ORIGINS ?? ""},${process.env.TANDEM_PUBLIC_URL ?? ""}`;
+  return configured
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      try {
+        return new URL(entry).origin;
+      } catch {
+        return entry.replace(/\/+$/, "");
+      }
+    });
+}
+
 function corsHeaders(req: IncomingMessage): Record<string, string> {
   const origin = req.headers.origin;
+  const allowed = allowedOrigins();
+  const permit = origin && (allowed.length === 0 ? true : allowed.includes(origin)) ? origin : allowed[0] ?? "*";
   return {
-    "Access-Control-Allow-Origin": origin ?? "*",
+    "Access-Control-Allow-Origin": permit,
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Max-Age": "600",
@@ -183,6 +205,11 @@ function requireService(ctx: Ctx, req: ApiRequest): void {
   if ((req.headers.authorization ?? "") !== `Bearer ${expected}`) {
     throw unauthorized("A service token is required for this endpoint.");
   }
+}
+
+function callerOf(req: IncomingMessage): string {
+  const forwarded = String(req.headers["x-forwarded-for"] ?? "").split(",")[0]?.trim() ?? "";
+  return forwarded || req.socket.remoteAddress || "";
 }
 
 const ROUTES: Route[] = [
@@ -238,6 +265,22 @@ const ROUTES: Route[] = [
       });
     },
   },
+  {
+    method: "POST",
+    pattern: /^\/v1\/intros\/close$/,
+    handler: (ctx, req, res) => {
+      const person = requirePerson(ctx, req);
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const introId = String(body.intro_id ?? "").trim();
+      if (!introId) throw badRequest("intro_id is required.", [{ field: "intro_id", message: "required" }]);
+      const row = closeIntro(ctx.db, { introId, personId: person.id });
+      send(res, 200, {
+        intro: introView(row, person.id),
+        note: "Closed. Neither side can propose this introduction again for 30 days.",
+      });
+    },
+  },
+
   // Direct messages are not a missing feature; they are a refusal.
   {
     method: "POST",
@@ -438,7 +481,9 @@ const ROUTES: Route[] = [
       const person = requirePerson(ctx, req);
       const body = req.body as Record<string, unknown>;
       assertNoReverseLookup(body, true); // this IS the proof flow
-      const result = await startPhoneConsent(ctx.db, ctx.config, person, body.phone);
+      const result = await startPhoneConsent(ctx.db, ctx.config, person, body.phone, {
+        requestedFrom: callerOf(req),
+      });
       send(res, 200, result);
     },
   },
@@ -684,8 +729,13 @@ const ROUTES: Route[] = [
       const requested = Number.isFinite(Number(body.limit)) ? Number(body.limit) : quota.remaining;
       const limit = Math.max(1, Math.min(requested, quota.remaining));
 
-      const candidates = listSearchable(ctx.db)
-        .filter((row) => row.id !== person.id)
+      const searchable = listSearchable(ctx.db).filter((row) => row.id !== person.id);
+      // The cap is two a fortnight for a person, not two a fortnight from them.
+      // Someone at their limit is not handed out again until their window moves.
+      const withRoom = searchable.filter((row) => matchQuota(ctx.db, row.id).remaining > 0);
+      const atCap = searchable.length - withRoom.length;
+
+      const candidates = withRoom
         .map((row) => ({ row, consents: liveConsents(ctx.db, row.id) }))
         // Only identity-verified people are matchable. Unverified profiles can
         // exist and be edited; they just cannot be found.
@@ -753,15 +803,43 @@ const ROUTES: Route[] = [
         .prepare("SELECT network, handle, status, evidence_url, created_at, verified_at FROM social_proofs WHERE person_id = ?")
         .all(person.id);
       const matches = ctx.db
-        .prepare("SELECT a_id, b_id, score, engine_version, created_at FROM matches WHERE a_id = ? OR b_id = ?")
+        .prepare(
+          "SELECT a_id, b_id, score, engine_version, created_at, matched_at FROM matches WHERE a_id = ? OR b_id = ?",
+        )
         .all(person.id, person.id);
+      const handles = ctx.db
+        .prepare(
+          "SELECT network, handle, method, verified, evidence_url, created_at FROM declared_handles WHERE person_id = ?",
+        )
+        .all(person.id);
+      // The inferred parts are the ones people actually want to see, so they are
+      // in the export rather than only in the database.
+      const signals = ctx.db
+        .prepare(
+          "SELECT source, kind, value, confidence, observed_at, expires_at FROM signals WHERE person_id = ?",
+        )
+        .all(person.id);
+      const intros = ctx.db
+        .prepare(
+          `SELECT status, thread_url, thread_host, proposed_at, responded_at, closed_at,
+                  CASE WHEN a_id = ? THEN b_id ELSE a_id END AS with_person
+             FROM intros WHERE a_id = ? OR b_id = ?`,
+        )
+        .all(person.id, person.id, person.id);
       send(res, 200, {
         exported_at: new Date().toISOString(),
         policy_version: ctx.config.policyVersion,
         person: personView(person, liveConsents(ctx.db, person.id)),
         consents: allConsents(ctx.db, person.id).map(consentView),
         social_proofs: proofs,
+        declared_handles: handles,
+        signals,
         matches,
+        intros,
+        audit_retention:
+          "Audit entries record the person id as the actor and survive an erase. " +
+          "They contain no name, location, interest or message, and they are the one " +
+          "thing that outlives a deletion on purpose.",
         note:
           "Identifier values are not recoverable: only hashes are stored. " +
           "Recompute any receipt_hash from the canonical receipt body to verify it.",

@@ -69,6 +69,7 @@ const SCHEMA = [
      code_hash TEXT NOT NULL,
      salt TEXT NOT NULL,
      attempts INTEGER NOT NULL DEFAULT 0,
+     requested_from TEXT NOT NULL DEFAULT '',
      created_at TEXT NOT NULL,
      expires_at TEXT NOT NULL,
      consumed_at TEXT,
@@ -109,7 +110,8 @@ const SCHEMA = [
      reasons TEXT NOT NULL,
      blockers TEXT NOT NULL DEFAULT '[]',
      engine_version TEXT NOT NULL,
-     created_at TEXT NOT NULL
+     created_at TEXT NOT NULL,
+     matched_at TEXT
    )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS matches_pair ON matches (a_id, b_id)`,
   `CREATE TABLE IF NOT EXISTS audit_log (
@@ -149,12 +151,52 @@ const SCHEMA = [
      status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','accepted','declined')),
      proposed_by TEXT NOT NULL REFERENCES people(id) ON DELETE CASCADE,
      proposed_at TEXT NOT NULL,
-     responded_at TEXT
+     responded_at TEXT,
+     closed_at TEXT
    )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS intros_pair ON intros (a_id, b_id)`,
   `CREATE INDEX IF NOT EXISTS intros_status ON intros (status)`,
+  // What survives an erase: a hash, a count, and when. No name, no location, no
+  // interests. It exists so that erasing an account cannot reset the match cap or
+  // retire a phone number into a fresh identity.
+  `CREATE TABLE IF NOT EXISTS retired_identities (
+     id TEXT PRIMARY KEY,
+     kind TEXT NOT NULL,
+     subject_hash TEXT NOT NULL,
+     matches_at_retirement INTEGER NOT NULL DEFAULT 0,
+     retired_at TEXT NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS retired_identities_lookup ON retired_identities (kind, subject_hash)`,
 
 ];
+
+function columns(db: Db, table: string): Set<string> {
+  return new Set(
+    (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((row) => row.name),
+  );
+}
+
+/**
+ * Additive migrations only. Each one is safe to run on every boot, which is the
+ * only reason this can stay a list of statements instead of a migration runner.
+ */
+function migrate(db: Db): void {
+  const matches = columns(db, "matches");
+  if (!matches.has("matched_at")) {
+    db.exec("ALTER TABLE matches ADD COLUMN matched_at TEXT");
+    // The quota window starts at the introduction, not at the last time we
+    // re-showed the pair, so backfill from the old column once.
+    db.exec("UPDATE matches SET matched_at = created_at WHERE matched_at IS NULL");
+  }
+  const challenges = columns(db, "phone_challenges");
+  if (!challenges.has("requested_from")) {
+    db.exec("ALTER TABLE phone_challenges ADD COLUMN requested_from TEXT NOT NULL DEFAULT ''");
+  }
+  const intros = columns(db, "intros");
+  if (!intros.has("closed_at")) {
+    db.exec("ALTER TABLE intros ADD COLUMN closed_at TEXT");
+  }
+}
 
 export function openDb(path: string): Db {
   if (path !== ":memory:") {
@@ -162,6 +204,7 @@ export function openDb(path: string): Db {
   }
   const db = new DatabaseSync(path);
   for (const statement of SCHEMA) db.exec(statement);
+  migrate(db);
   return db;
 }
 

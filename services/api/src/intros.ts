@@ -10,6 +10,10 @@
 import type { Db } from "./db.ts";
 import { badRequest, conflict, forbidden, notFound } from "./errors.ts";
 import { newId } from "./crypto.ts";
+import { liveConsents } from "./store.ts";
+
+/** How long a "no" holds before the same pair can be proposed again. */
+export const DECLINE_COOLDOWN_DAYS = 30;
 
 /** Hosts where a thread is a closed space or a private message surface. */
 const CLOSED_HOSTS = [
@@ -99,10 +103,18 @@ function personExists(db: Db, id: string): boolean {
   return Boolean(db.prepare("SELECT 1 AS ok FROM people WHERE id = ?").get(id));
 }
 
+/**
+ * A live consent is one that has not been revoked *and* has not expired. The
+ * expiry half used to be missing here, which let an expired consent authorise an
+ * introduction that store.liveConsents would elsewhere refuse.
+ */
 function hasLiveConsent(db: Db, id: string): boolean {
-  return Boolean(
-    db.prepare("SELECT 1 AS ok FROM consents WHERE person_id = ? AND revoked_at IS NULL LIMIT 1").get(id),
-  );
+  return liveConsents(db, id).length > 0;
+}
+
+function cooldownUntil(iso: string | null): string | null {
+  if (!iso) return null;
+  return new Date(new Date(iso).getTime() + DECLINE_COOLDOWN_DAYS * 86_400_000).toISOString();
 }
 
 export function createIntro(
@@ -132,11 +144,24 @@ export function createIntro(
     | IntroRow
     | undefined;
 
-  if (existing && existing.status !== "declined") {
-    throw conflict(
-      existing.status === "accepted"
-        ? "You two already have an introduction. Go and talk in the thread."
-        : "An introduction is already proposed for this pair.",
+  if (existing && !existing.closed_at) {
+    if (existing.status === "accepted") {
+      throw conflict("You two already have an introduction. Go and talk in the thread.");
+    }
+    if (existing.status === "proposed") {
+      throw conflict("An introduction is already proposed for this pair.");
+    }
+  }
+
+  // A "no" holds for a month, and so does a closed thread. Without this, a
+  // decline was a button the proposer could simply press again.
+  const cooledFrom = existing
+    ? cooldownUntil(existing.closed_at ?? (existing.status === "declined" ? existing.responded_at : null))
+    : null;
+  if (cooledFrom && new Date(cooledFrom).getTime() > Date.now()) {
+    throw forbidden(
+      `That did not happen, recently. An introduction to this person can be proposed again after ` +
+        `${cooledFrom.slice(0, 10)}. A no is supposed to mean something here.`,
     );
   }
 
@@ -144,7 +169,7 @@ export function createIntro(
   if (existing) {
     db.prepare(
       `UPDATE intros SET thread_url = ?, thread_host = ?, status = 'proposed',
-         proposed_by = ?, proposed_at = ?, responded_at = NULL WHERE id = ?`,
+         proposed_by = ?, proposed_at = ?, responded_at = NULL, closed_at = NULL WHERE id = ?`,
     ).run(thread.url, thread.host, values.proposerId, now, existing.id);
     return db.prepare("SELECT * FROM intros WHERE id = ?").get(existing.id) as IntroRow;
   }
@@ -180,6 +205,9 @@ export function respondToIntro(
   if (row.proposed_by === values.personId) {
     throw forbidden("The person who proposed an introduction cannot accept it.");
   }
+  if (row.closed_at) {
+    throw conflict("This introduction was closed. Propose a new one if you both still want it.");
+  }
   if (row.status !== "proposed") {
     throw conflict(`This introduction is already ${row.status}.`);
   }
@@ -188,6 +216,21 @@ export function respondToIntro(
     new Date().toISOString(),
     row.id,
   );
+  return getIntro(db, row.id);
+}
+
+/**
+ * Either side can end an introduction, accepted or not. Withdrawing is closing;
+ * there is no separate "unsend", because the other person may already have read it
+ * and pretending otherwise would be a lie the API tells.
+ */
+export function closeIntro(db: Db, values: { introId: string; personId: string }): IntroRow {
+  const row = getIntro(db, values.introId);
+  if (row.a_id !== values.personId && row.b_id !== values.personId) {
+    throw notFound("No such introduction.");
+  }
+  if (row.closed_at) return row;
+  db.prepare("UPDATE intros SET closed_at = ? WHERE id = ?").run(new Date().toISOString(), row.id);
   return getIntro(db, row.id);
 }
 
@@ -201,7 +244,8 @@ export function introView(row: IntroRow, viewerId: string): Record<string, unkno
   const visible = isProposer || row.status === "accepted";
   return {
     id: row.id,
-    status: row.status,
+    status: row.closed_at ? "closed" : row.status,
+    closed_at: row.closed_at,
     proposed_by: isProposer ? "you" : "them",
     proposed_at: row.proposed_at,
     responded_at: row.responded_at,

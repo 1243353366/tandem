@@ -121,6 +121,7 @@ returned in the API response, so no SMS provider is needed to run the flow.
 ```bash
 cp .env.example .env
 # fill in TANDEM_PEPPER (openssl rand -hex 32), TANDEM_PUBLIC_URL, TANDEM_SMS_WEBHOOK
+# TANDEM_ALLOWED_ORIGINS is a comma-separated CORS allowlist; empty reflects any origin
 set -a; source .env; set +a
 ./scripts/launch.sh
 ```
@@ -211,9 +212,12 @@ mentor/mentee complement and the reciprocity matrix, are in
 
 Matching is capped at **two introductions per person per 14 days**, enforced in
 `services/api/src/quota.ts` and re-checked in the route, so a matcher that
-over-returns cannot exceed it. `GET /v1/quota` states where a person stands and when
-a slot frees up. Scarcity is the product decision: a list of ten people is not an
-introduction.
+over-returns cannot exceed it. The cap applies **both ways**: someone already at
+their limit is not handed out to anyone else, and the window is keyed on
+`matched_at`, which is written once and never refreshed by re-showing a pair.
+`GET /v1/quota` states where a person stands, when a slot frees up, and how much of
+their window carried over from a previous account on the same phone. Scarcity is
+the product decision: a list of ten people is not an introduction.
 
 An introduction is a **public thread the person chose**:
 
@@ -222,8 +226,15 @@ POST /v1/intros   { "peer_id": "...", "thread_url": "https://github.com/org/repo
 POST /v1/intros/respond { "intro_id": "...", "accept": true }
 ```
 
+The check is a blocklist of DM and closed-space hosts, not a proof of publicness: a
+Google Doc or a private repository issue would pass it. The enforced property is "not
+a place you get to someone in private" — if you need stronger, swap the blocklist for
+an allowlist of archive-shaped hosts in `services/api/src/intros.ts`.
+
 Both sides see the thread only after the second person accepts, and a declined
-introduction shows them nothing. `POST /v1/dm`, `/v1/messages` and any `/message`
+introduction shows them nothing. A decline holds for **30 days**, and either side can
+close an introduction with `POST /v1/intros/close`; a closed thread is closed for a
+month too, so a no is not a button the other person can press again. `POST /v1/dm`, `/v1/messages` and any `/message`
 path return 403: direct messages are not a missing feature here, they are a refusal.
 `GET /v1/intros` is the whole inbox, because there is nothing to read in private.
 
@@ -236,9 +247,17 @@ POST /v1/consent/phone/verify      → consent receipt, HMAC over a canonical bo
 GET  /v1/matches                   → 403 until at least one identifier is verified
 GET  /v1/consent                   → every consent, with scope and receipt hash
 POST /v1/consent/:id/revoke        → consent dies, derived signals die with it
-GET  /v1/export                    → everything held about you
-DELETE /v1/people/:id              → erases profile, consents, proofs, signals
+GET  /v1/export                    → everything held about you, inferred data included
+DELETE /v1/people/:id              → erases profile, consents, proofs, signals, intros
 ```
+
+**What erase keeps.** Every descriptive column is emptied: name, headline, city,
+region, country, timezone, interests, current project, tags, hours, looking_for,
+offers, comm style. What survives is a hash of each verified identifier with the
+number of matches it had in the current window, plus audit entries that record the
+person id as the actor. The hash exists so that erase-and-return cannot reset the
+two-a-fortnight cap or recycle a phone number into a fresh identity. It carries no
+name, no location and no interests, and the API says so in the export.
 
 Social accounts link by **proof post**, not by password and not by scraping: the
 server generates a nonce, you paste it on your own profile, the server reads it
@@ -316,7 +335,7 @@ make test-fast   # api + matcher
 | suite | count | covers |
 | --- | --- | --- |
 | `services/matcher/test` | 36 | scoring, vocabulary, caps, ranking, malformed input |
-| `services/api/test` | 71 | consent flow, OTP replay/rate limits, receipts, proofs, policy, erasure |
+| `services/api/test` | 82 | consent flow, OTP replay and per-caller limits, receipts, proofs, policy, erasure, the cap both ways, export completeness, intro cooldown, CORS |
 | `services/scout/test` | 73 | adapters, PII scrubbing, queue rules, opt-out, public/private surfaces, end-to-end replay |
 
 No network in any of them. `scripts/demo.sh` is the integration test, and CI runs
@@ -328,6 +347,9 @@ The tests worth reading first:
   anyone holding the receipt"*
 - `services/scout/test/test_scout.py` → *"only public thread invites are
   allowed"*
+- `services/api/test/review.test.ts` → the regressions from the first code review:
+  erase leaves no descriptive column, a phone that erases and returns does not get
+  a fresh fortnight, the export includes what we inferred
 
 ---
 

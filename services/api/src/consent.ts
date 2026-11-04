@@ -23,6 +23,7 @@ import {
   insertConsent,
   liveConsents,
   recentChallengeCount,
+  recentChallengeCountForOrigin,
 } from "./store.ts";
 import { MAX_CONSENTS_PER_PERSON } from "./policy.ts";
 
@@ -92,6 +93,7 @@ export async function startPhoneConsent(
   config: Config,
   person: PersonRow,
   phoneRaw: unknown,
+  options: { requestedFrom?: string } = {},
   now: () => number = Date.now,
 ) {
   const phone = normalizePhone(phoneRaw);
@@ -107,6 +109,13 @@ export async function startPhoneConsent(
 
   if (recentChallengeCount(db, person.id) >= config.otp.maxPerHour) {
     throw tooMany("Too many verification codes requested. Try again in an hour.");
+  }
+
+  // Per phone is not enough on its own: a loop over many numbers would still send
+  // one SMS each from the same caller. Five accounts' worth per address per hour.
+  const origin = options.requestedFrom ?? "";
+  if (recentChallengeCountForOrigin(db, origin) >= config.otp.maxPerHour * 5) {
+    throw tooMany("Too many verification codes requested from this address. Try again later.");
   }
 
   const phoneHash = digest(config.pepper, `phone:${phone}`);
