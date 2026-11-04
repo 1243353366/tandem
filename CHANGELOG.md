@@ -16,6 +16,13 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
 
 ### Security
 
+- **Provenance framing on three boundaries** (`docs/trust-boundary.md`). Console lines are
+  either `[tandem]` (ours) or framed `┆ source ┆ content`, flattened, control-free, with
+  marker characters neutralised so content cannot close the frame. Digest interests each
+  name the URL that produced them, handle and reason fields are sanitised, drafts cannot
+  close their own fence, and JSON marks itself `untrusted`. The authority boundary is
+  absence: no model client, no auto-reply, and only counts, tags and URLs cross to the API.
+
 - **Scout injection review, seven findings.** See `docs/security-review-scout-injection.md`.
   Memorable ones: the consented member-enrichment path had its own fetcher and no guard at
   all; zero-width and fullwidth spelling defeated every pattern; a corrupt quarantine cache

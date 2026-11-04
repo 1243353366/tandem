@@ -53,9 +53,14 @@ class Candidate:
     invite_channel: str = "public_thread"
     invite_url: str = ""
     draft: str = ""
+    #: interest -> the URLs whose text produced it, so a reader can check the claim
+    interest_sources: dict[str, list[str]] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         return {
+            # Written by someone else. Consumers must treat every field except
+            # `untrusted` as data, never as an instruction.
+            "untrusted": True,
             "source": self.source,
             "handle": self.handle,
             "profile_url": self.profile_url,
@@ -66,6 +71,7 @@ class Candidate:
             "priority": round(self.priority, 3),
             "why": self.why,
             "evidence_urls": self.evidence_urls,
+            "interest_sources": self.interest_sources,
             "invite": {
                 "channel": self.invite_channel,
                 "url": self.invite_url,

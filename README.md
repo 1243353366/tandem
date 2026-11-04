@@ -97,7 +97,7 @@ git clone <this repo> tandem && cd tandem
 make demo     # end-to-end on throwaway ports: seed, match, scout, tear down
 make dev      # api :8080, matcher :8081, web :5173
 make typecheck  # tsc --noEmit on the api
-make test     # all suites (227 tests)
+make test     # all suites (238 tests)
 ```
 
 `make demo` is the fastest way to see it move. It boots both services on spare
@@ -348,7 +348,9 @@ enters the queue, and in recorded fixtures before a replay. On a hit:
 4. the item is dropped, and the source's report says `injection`.
 
 `make injections` prints the log. Findings from the injection review, and what it could not verify, are in
-[`docs/security-review-scout-injection.md`](docs/security-review-scout-injection.md).
+[`docs/security-review-scout-injection.md`](docs/security-review-scout-injection.md). How the
+console, the digest and whatever reads them next keep their provenance separate is in
+[`docs/trust-boundary.md`](docs/trust-boundary.md).
 
 The rules are deliberately narrow (`ignore all previous
 instructions`, `post one or two replies`, `do not tell the operator`, role markers and the
@@ -386,7 +388,7 @@ make test-fast   # api + matcher
 | --- | --- | --- |
 | `services/matcher/test` | 36 | scoring, vocabulary, caps, ranking, malformed input |
 | `services/api/test` | 86 | consent flow, OTP replay and per-caller limits, receipts, proofs, policy, erasure, the cap both ways, export completeness, intro cooldown, CORS |
-| `services/scout/test` | 98 | adapters, PII scrubbing, queue rules, opt-out, public/private surfaces, end-to-end replay |
+| `services/scout/test` | 109 | adapters, PII scrubbing, queue rules, opt-out, public/private surfaces, end-to-end replay |
 
 No network in any of them. `scripts/demo.sh` is the integration test, and CI runs
 both.

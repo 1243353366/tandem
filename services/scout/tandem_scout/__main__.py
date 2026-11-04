@@ -21,7 +21,7 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import injection, members as member_mod
+from . import console, injection, members as member_mod
 from . import policy, queue, sources
 from .models import Observation
 
@@ -73,7 +73,7 @@ def run_members(args) -> int:
     stored = 0
     for person_id, derived in merged.items():
         for error in derived.errors:
-            print(f"  {person_id[:8]}  {error}")
+            console.relay([error], person_id[:8])
         if not derived.interests:
             continue
         response = _service_call(
@@ -85,7 +85,7 @@ def run_members(args) -> int:
             f"{', '.join(derived.interests[:4])}  ({'+'.join(derived.sources) or 'none'})"
         )
 
-    print(f"\nread {len(handles)} declared handle(s) from {len(members)} member(s); stored {stored} signal(s)")
+    console.say(f"read {len(handles)} declared handle(s) from {len(members)} member(s); stored {stored} signal(s)")
     print("revoking a handle removes every signal derived from it, in the same transaction")
     return 0
 
@@ -176,8 +176,10 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 injection.DEFAULT.guard(record.text, source=record.source, url=record.url)
             except injection.InjectionRefused as refused:
-                print(f"dropped a recorded item from {refused.attempt.source}: {refused.attempt.rule}; "
-                      f"logged to {injection.DEFAULT.log_path.name}", file=sys.stderr)
+                print(console.relayed(
+                    [f"dropped: {refused.attempt.rule}", f"logged to {injection.DEFAULT.log_path.name}"],
+                    refused.attempt.source,
+                ), file=sys.stderr)
                 continue
             observations.append(record)
         reports = [{"source": name, "status": "replay", "observations": str(len(observations)), "note": ""}
@@ -207,28 +209,39 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps([candidate.to_json() for candidate in candidates], indent=2))
     else:
-        print(f"scanned {stats['seen']} public items across {len(reports)} source(s)")
+        console.say(f"scanned {stats['seen']} public items across {len(reports)} source(s)")
         print(
             f"queue {stats['queued']} · stale {stats['stale']} · opted out {stats['opted_out']} · "
             f"too thin {stats['too_thin']} · group signals {stats['group_signal']}"
         )
         for report in reports:
-            print(f"  {report['source']:<11} {report['status']:<9} {report['observations']:>3}  {report.get('note', '')}")
+            console.relay(
+                [report["status"], f"{report['observations']:>3}", report.get("note", "")],
+                report["source"],
+            )
         print()
         for candidate in candidates[:8]:
-            print(f"  {candidate.priority:.2f}  {candidate.handle:<20} {candidate.source:<11} "
-                  f"{', '.join(candidate.interests[:3])}")
+            console.relay(
+                [f"{candidate.priority:.2f}", candidate.handle, ", ".join(candidate.interests[:3])],
+                candidate.source,
+            )
         if not candidates:
-            print("  (nothing cleared the bar this run)")
+            console.say("nothing cleared the bar this run")
         if groups:
             print()
-            print("  public groups (community list, not invites):")
+            console.say("public groups (community list, not invites):")
             for group in groups[:6]:
                 quiet = " (quiet)" if group["quiet"] else ""
-                print(f"    {group['source']}:{group['handle']}{quiet}  "
-                      f"{group['posts_per_week']}/7d  {', '.join(group['interests'][:3])}")
-        print(f"\nwrote {paths['digest']}\n      {paths['queue']}\n      {paths['groups']}")
-        print("\nread the digest and post one or two replies yourself. not more.")
+                console.relay(
+                    [
+                        f"{group['source']}:{group['handle']}{quiet}",
+                        f"{group['posts_per_week']}/7d",
+                        ", ".join(group["interests"][:3]),
+                    ],
+                    group["source"],
+                )
+        console.say(f"wrote {paths['digest']}, {paths['queue']}, {paths['groups']}")
+        console.say("read the digest and post one or two replies yourself. not more.")
 
     return 0
 
