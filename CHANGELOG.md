@@ -3,6 +3,23 @@
 Notable changes to Tandem. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versions follow [SemVer](https://semver.org/). Dates are the day the change landed on `main`.
 
+### Added
+
+- **`Host it yourself` in the README.** Self-hosting for Render, Railway, AWS (Lightsail or EC2
+  with EBS, or Fargate with EFS) and Cloudflare, written for what this service actually is rather
+  than for a static site: a Node 24 process, a disk that survives deploys, three required
+  environment values, and a nightly job at 05:00 UTC. Two settings get their own section because
+  they decide whether the deployment is safe (`TANDEM_TRUST_PROXY`, TLS in front). Cloudflare is
+  documented as DNS, TLS and a WAF rather than as compute, because Workers cannot run `node:sqlite`
+  and the SQL would need porting to D1. Every link was fetched before committing.
+- **The obligations of running it**, stated where an operator will read them: erasure and export
+  requests land on them, the consent rules are code rather than configuration so "improving" reach
+  means editing them, backups are theirs and untested backups do not count, and digest text does
+  not belong in a log aggregator.
+- **Three post-deploy checks the suite cannot prove**: a digest refuses a private source, an
+  introduction cannot reach an unlisted thread, and an erase really clears the columns.
+
+
 ## [Unreleased]
 
 ### Changed

@@ -136,6 +136,121 @@ strangers.
 
 ---
 
+## Host it yourself
+
+The same posture as everything else here: **this is not hosted for you, on purpose.** A platform
+that holds who someone is willing to build with, and what they wrote to get there, should not sit
+on one person's server under one person's name. Running it yourself keeps the responsibility where
+it belongs, keeps me out of holding your users' consents, and reduces my exposure to a risk I am
+not willing to carry for everyone. **Thank you for cooperating with that**, and for reading the
+warnings below rather than the version of this that skips them.
+
+This is not a static site. Read the next section before you pick a provider, because two of the
+four will silently lose your database if you configure them the obvious way.
+
+### What it needs
+
+- **A Node 24 process.** `node services/api/src/main.ts`. No build step, no transpiler, types are
+  stripped at run time.
+- **A disk that survives a deploy.** The store is SQLite (`tandem.db`). On a platform with an ephemeral
+  filesystem, every deploy, restart or scale event gives you an empty database and every consent
+  receipt, match and introduction is gone. This is the single most common way to break this
+  platform while it looks like it is working.
+- **Python 3** for the scout and the matching engine, plus `make` for the targets below.
+- **Three values in the environment, at minimum:** `TANDEM_PEPPER`, `TANDEM_PUBLIC_URL`, `PORT`, `TANDEM_DB`.
+  The pepper is required in production and has no default on purpose. Read the comment above it in
+  `.env.example` before you generate one: rotating it makes existing consent receipts
+  unverifiable, which is the intended behaviour and a bad surprise.
+- **A nightly job** for the scout and digest. The repository does this with GitHub Actions at
+  05:00 UTC (`.github/workflows/scout-nightly.yml`); on another platform use its scheduler and the
+  same command, `make scout`.
+
+### Two settings that decide whether this is safe
+
+- `TANDEM_TRUST_PROXY` (read in `services/api/src/app.ts`). Set it to `1` **only** behind a proxy that overwrites
+  `X-Forwarded-For`. Left off behind a proxy, every request looks like it comes from the proxy and
+  the rate limits become one shared bucket for all users. Set on without a proxy, the caller
+  chooses its own identity and the limits mean nothing.
+- **TLS in front.** Terminate HTTPS at the platform. `TANDEM_PUBLIC_URL` must be the real public
+  origin, because redirect URIs and every link in a digest are built from it.
+
+### Render
+
+The shortest path that does not lose data.
+
+1. **New → Web Service**, connect your fork.
+2. Build command: none for the API, which has **zero runtime dependencies**. Start command:
+   `node services/api/src/main.ts`. If you also run the scout there, install its Python
+   requirements in the build step.
+3. **Add a Persistent Disk** and mount it where the database lives, then point `TANDEM_DB` at the
+   mounted path. Without this step the free instance gives you an empty database on every deploy.
+4. Set the environment values, deploy, then add a **Cron Job** for `make scout`.
+  Docs: [Web Services](https://render.com/docs/web-services), [persistent disks](https://render.com/docs/disks),
+  [cron jobs](https://render.com/docs/cronjobs)
+
+### Railway
+
+1. New project from your fork.
+2. **Add a Volume**, mount it, and set `TANDEM_DB` inside the mount.
+3. Start command `node services/api/src/main.ts`, environment values set, then generate a domain.
+4. For the nightly run, either a second service with a cron schedule or a scheduled GitHub Action
+   that calls `make scout` against the deployed instance.
+  Docs: [volumes](https://docs.railway.com/guides/volumes), [Railway documentation](https://docs.railway.com/)
+
+### AWS
+
+Two honest options. Pick by how much you want to own.
+
+- **Lightsail or EC2 with an EBS volume.** A small instance, the repo cloned, a systemd unit or
+  `make web` under a process manager, an EBS mount for `TANDEM_DB`, nginx or Caddy terminating TLS,
+  and EventBridge Scheduler for the 05:00 run. Persistent, boring, and you own the patching.
+  Docs: [Lightsail](https://docs.aws.amazon.com/lightsail/latest/userguide/getting-started-with-amazon-lightsail.html), [EC2](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/concepts.html), [EBS volumes](https://docs.aws.amazon.com/ebs/latest/userguide/what-is-ebs.html),
+  [EventBridge Scheduler](https://docs.aws.amazon.com/scheduler/latest/UserGuide/what-is-scheduler.html)
+- **ECS Fargate behind a load balancer**, with **EFS** mounted for the database. More moving parts,
+  no server to patch. Do not run the container without EFS: the task filesystem is throwaway, and
+  this platform's whole value is in the rows.
+
+### Cloudflare
+
+Blunt version: **the API does not run on Workers as it stands.** `node:sqlite` and a
+filesystem-backed database are not available in that runtime, and the SQL would need porting to D1
+before this code could exist there. Cloudflare is still useful, just not as the compute:
+DNS, TLS, caching and a WAF in front of whichever runtime you chose above.
+  Docs: [Workers runtime limits](https://developers.cloudflare.com/workers/platform/limits/), [D1](https://developers.cloudflare.com/d1/)
+
+### The obligations you take on by running it
+
+These are the price of the convenience, and they are not optional extras.
+
+- **You are the operator.** Erasure and export requests land with you. The endpoints exist
+  (`tandemctl` and the API); the response time does not enforce itself. If you cannot commit to
+  answering one inside a stated window, do not run this for other people.
+- **Keep the consent model intact.** One page deep, public sources only, no DMs, two matches per
+  fortnight, declines cooling off for 30 days. They are enforced in code, not in configuration, so
+  the way to break them is to edit them. If you "improve" reach by unpicking one, you are running a
+  different product with this one's name on it.
+- **Backups are yours.** Copy the SQLite file on a schedule, and restore one into a scratch
+  directory before you trust it. An untested backup is a story you tell yourself.
+- **Keep bodies out of logs.** Request ids are there for correlation; the digest text and what
+  people write are not for your log aggregator.
+
+### Put it up, then check these before you invite anyone
+
+```
+make test          # the whole suite, matcher + api + scout + tools
+make doctor        # configuration sanity
+curl -s localhost:8080/healthz | head -c 200   # must answer, not hang
+```
+
+Then three things the tests do not prove, because they depend on your deployment:
+
+1. A digest refuses a private source. Point the scout at a members-only thread; the policy layer
+   should refuse rather than summarise it.
+2. An introduction cannot reach a DM. The threads you allow are an allowlist; a source you did not
+   list should produce a refusal, not a link.
+3. A delete actually deletes. Create a test person, erase them, and confirm the profile columns are
+   null, the cap row remains only as a hash, and the export returns nothing for them.
+
 ## Architecture
 
 Polyglot on purpose: each service uses the tool that fits it, and the seams are
