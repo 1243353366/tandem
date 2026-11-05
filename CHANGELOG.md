@@ -62,6 +62,33 @@ versions follow [SemVer](https://semver.org/). Dates are the day the change land
 
 ### Security
 
+- **The backup advice could produce an empty database.** The README told operators to copy
+  `tandem.db`. The database runs in WAL mode, so recent writes sit in `-wal` until a checkpoint,
+  and a plain copy can open as a stale database or as one with no tables at all. Found by the
+  test that now pins it, not by reading. Snapshotting is `VACUUM INTO`, and `make backup-check`
+  opens the result, runs `integrity_check` and prints row counts. `test/backup.test.ts` asserts
+  the snapshot restores with its rows and that the naive copy does not.
+
+### Fixed
+
+- **The injection log could fill a disk.** It appended forever with no ceiling, which is a denial
+  of service an attacker can trigger by generating attempts. It rotates at 5 MiB and keeps one
+  previous generation. A size cap has to drop something and it drops the oldest attempt, which is
+  stated rather than implied, and rotation itself is worth an alert.
+
+### Process
+
+- **The review taxonomy gained six categories**: requirements and specification, human factors,
+  machine learning and AI systems, resilience engineering, economic cost, and reviewer failure,
+  plus a coarse L0 to L12 detection hierarchy, S0 to S4 severity, confidence levels and a
+  machine-readable finding schema. Root causes and manifestations are recorded separately: path
+  traversal is security with a filesystem manifestation, a connection leak is lifecycle with a
+  database or socket specialisation.
+
+- Test counts in the README are recomputed rather than remembered (247, was 238).
+
+### Security
+
 - **The rate limiter trusted a header the caller writes** (`services/api/src/app.ts`,
   `callerOf`). `X-Forwarded-For` was read unconditionally, so a fresh value per request
   produced a fresh identity and reset every per-caller budget: verification codes, browsing

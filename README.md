@@ -97,7 +97,7 @@ git clone <this repo> tandem && cd tandem
 make demo     # end-to-end on throwaway ports: seed, match, scout, tear down
 make dev      # api :8080, matcher :8081, web :5173
 make typecheck  # tsc --noEmit on the api
-make test     # all suites (238 tests)
+make test     # all suites (247 tests)
 ```
 
 `make demo` is the fastest way to see it move. It boots both services on spare
@@ -229,8 +229,19 @@ These are the price of the convenience, and they are not optional extras.
   fortnight, declines cooling off for 30 days. They are enforced in code, not in configuration, so
   the way to break them is to edit them. If you "improve" reach by unpicking one, you are running a
   different product with this one's name on it.
-- **Backups are yours.** Copy the SQLite file on a schedule, and restore one into a scratch
-  directory before you trust it. An untested backup is a story you tell yourself.
+- **Backups are yours, and a file copy is not a backup.** The database runs in WAL mode, so
+  recent writes sit in the `-wal` file until a checkpoint: copying only `tandem.db` can give you
+  a database that is older than you think, or one with no tables in it at all. Snapshot with
+  `VACUUM INTO`, which is consistent, then verify it:
+
+  ```sh
+  sqlite3 data/tandem.db "VACUUM INTO '/tmp/tandem-snapshot.db'"
+  make backup-check DB=/tmp/tandem-snapshot.db
+  ```
+
+  `make backup-check` opens the snapshot, runs SQLite's own `integrity_check`, and prints the row
+  counts. It proves the copy restores. It does not prove the schedule runs, that the copy is
+  recent, or that it is stored somewhere safe, and those are still yours.
 - **Keep bodies out of logs.** Request ids are there for correlation; the digest text and what
   people write are not for your log aggregator.
 

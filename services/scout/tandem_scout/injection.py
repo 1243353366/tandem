@@ -116,12 +116,33 @@ class InjectionRefused(Exception):
         self.attempt = attempt
 
 
+#: Attempts are evidence, so they are never truncated. The file is rotated instead, one
+#: generation kept, because an attacker who can generate attempts can also fill a disk.
+LOG_MAX_BYTES = 5 * 1024 * 1024
+
+
 class InjectionLog:
     """Append-only evidence, plus the list of URLs we refuse to open again."""
 
     def __init__(self, log_path: Path = DEFAULT_LOG, quarantine_path: Path = DEFAULT_QUARANTINE):
         self.log_path = Path(log_path)
         self.quarantine_path = Path(quarantine_path)
+
+    def _rotate(self) -> None:
+        """Keep one previous generation once the log passes its ceiling.
+
+        A size cap has to drop something, and what it drops is the oldest attempt. That is the
+        trade: unbounded evidence, or a disk an attacker can fill. Rotation itself is worth an
+        alert, because a burst that forces it is more interesting than any single line in it.
+
+        Best effort under concurrency: two scouts may both rotate, and the loser's rename fails
+        harmlessly.
+        """
+        try:
+            if self.log_path.exists() and self.log_path.stat().st_size >= LOG_MAX_BYTES:
+                os.replace(self.log_path, self.log_path.with_name(self.log_path.name + ".1"))
+        except OSError:
+            return
 
     def _from_log(self) -> dict[str, dict[str, str]]:
         """Rebuild the hold list from the append-only log.
@@ -170,6 +191,7 @@ class InjectionLog:
         line = json.dumps(attempt.to_json(), sort_keys=True) + "\n"
         # One O_APPEND write per attempt: two scouts racing cannot interleave halves of
         # a line, and nothing rewrites history already written.
+        self._rotate()
         handle = os.open(self.log_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
         try:
             os.write(handle, line.encode("utf-8"))

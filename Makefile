@@ -128,6 +128,10 @@ seed:
 match:
 	@./cli/tandemctl match Ada
 
+.PHONY: backup-check
+backup-check:
+	@$(NODE) scripts/backup-check.ts $(DB)
+
 .PHONY: doctor
 doctor:
 	@./cli/tandemctl doctor
